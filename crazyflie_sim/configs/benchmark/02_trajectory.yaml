@@ -1,0 +1,13 @@
+# Benchmark 2: tracking a minimum-snap path (4.2 m at 0.5 m/s, a 0.5 m climb
+# and descent) from hover at 1 m; about 10.5 s.
+name: trajectory
+sim_mode: trajectory
+initial_pos: [0.0, 0.0, 1.0]
+trajectory_speed: 0.5
+waypoint_source: list
+user_waypoints:
+  - [0.0, 0.0, 1.0]
+  - [1.0, 0.0, 1.0]
+  - [1.0, 1.0, 1.5]
+  - [0.0, 1.0, 1.0]
+  - [0.0, 0.0, 1.0]

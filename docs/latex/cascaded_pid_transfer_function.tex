@@ -1,0 +1,691 @@
+\documentclass[11pt]{article}
+
+\usepackage[letterpaper,margin=0.82in]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{xcolor}
+\usepackage{xurl}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{titlesec}
+
+\definecolor{DocBlue}{HTML}{1F4E79}
+\definecolor{DocRule}{HTML}{D0D7DE}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=DocBlue,
+  urlcolor=DocBlue,
+  pdfauthor={Crazyflie Simulator},
+  pdftitle={Closed-Loop Poles of the Cascaded PID Hover Model}
+}
+
+\setlist[itemize]{topsep=0.25em,itemsep=0.12em,parsep=0pt,leftmargin=1.35em}
+\renewcommand{\arraystretch}{1.16}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.42em}
+\setlength{\emergencystretch}{3em}
+\allowdisplaybreaks
+
+\pagestyle{empty}
+
+\titleformat{\section}
+  {\Large\bfseries\color{DocBlue}}
+  {\thesection.}{0.55em}{}
+\titleformat{\subsection}
+  {\large\bfseries\color{DocBlue}}
+  {\thesubsection}{0.45em}{}
+
+\DeclareRobustCommand{\code}[1]{\nolinkurl{#1}}
+\newcommand{\degc}{d_{\mathrm{eg}}}
+\newcommand{\gammar}{\gamma_{\mathrm{rp}}}
+\newcommand{\gammay}{\gamma_{\mathrm{yaw}}}
+
+\begin{document}
+
+\begin{center}
+{\Huge\bfseries Closed-Loop Poles}\\[0.25em]
+{\large Cascaded PID controller + hover-linearized Crazyflie dynamics}
+\end{center}
+
+
+\section{Main Modeling Assumptions}
+
+The closed-loop pole calculation uses the local continuous-time hover model:
+
+\begin{itemize}
+  \item level hover, zero yaw, zero angular rates;
+  \item small perturbations, no controller saturation or clipping;
+  \item quadratic translational drag has zero analytic Jacobian at zero speed;
+  \item static wrench-to-PWM-to-thrust conversion is treated as locally identity;
+  \item outer-loop integrators use \(K_i^\star=K_i/5\), because the code updates
+        the outer loop every five 500 Hz controller ticks.
+\end{itemize}
+
+Important numerical constants are
+
+\[
+\begin{aligned}
+m &= 0.0400,\qquad
+g = 9.81,\\
+I_x &= I_y = 2.39\times 10^{-5},\qquad
+I_z = 3.23\times 10^{-5},\\
+c_x &= c_y = 2.0\times 10^{-6},\qquad
+c_z = 3.0\times 10^{-6},\\
+\gammar &= 4.315969000436706\times 10^{-7},\\
+\gammay &= 6.94941672257353\times 10^{-8},\\
+\degc &= 180/\pi = 57.29577951308232.
+\end{aligned}
+\]
+
+Here \(\gammar\) and \(\gammay\) are the code's scale factors from the
+firmware-like rate-controller outputs to physical roll/pitch and yaw moments.
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.26\linewidth}
+                  >{\raggedright\arraybackslash}p{0.28\linewidth}
+                  >{\raggedright\arraybackslash}p{0.34\linewidth}}
+\toprule
+Loop & Code gains & Continuous gains used here \\
+\midrule
+XY position & \(K_p=1.6,\ K_i=8.0\) & \(K_p=1.6,\ K_{pi}^{\star}=1.6\) \\
+XY velocity & \(K_p=22.0,\ K_i=0.5\) & \(K_v=22.0,\ K_{vi}^{\star}=0.1\) \\
+Z position & \(K_p=2.0,\ K_i=0.5\) & \(K_{pz}=2.0,\ K_{piz}^{\star}=0.1\) \\
+Z velocity & \(K_p=25.0,\ K_i=15.0\) & \(K_{vz}=25.0,\ K_{viz}^{\star}=3.0\) \\
+Roll/pitch attitude & \(K_a=6.0,\ K_{ai}=3.0\) & same \\
+Roll/pitch rate & \(K_r=200.0,\ K_{ri}=400.0,\ K_{rd}=2.5\) & same \\
+Yaw attitude & \(K_a=6.0,\ K_{ai}=1.0,\ K_{ad}=0.35\) & same \\
+Yaw rate & \(K_r=120.0,\ K_{ri}=16.7\) & same \\
+\bottomrule
+\end{longtable}
+
+\section{Hover Plant Used For The Pole Equations}
+
+At level hover, the small-signal plant is
+
+\[
+\begin{aligned}
+\delta \ddot{x} &= g\,\delta\theta, &
+\delta \ddot{y} &= -g\,\delta\phi, &
+\delta \ddot{z} &= \frac{1}{m}\delta F,\\
+\delta\dot{\phi} &= \delta p, &
+\delta\dot{\theta} &= \delta q, &
+\delta\dot{\psi} &= \delta r,\\
+I_x\delta\dot{p} &= \delta M_x-c_x\delta p, &
+I_y\delta\dot{q} &= \delta M_y-c_y\delta q, &
+I_z\delta\dot{r} &= \delta M_z-c_z\delta r.
+\end{aligned}
+\]
+
+At zero yaw, the acceleration-to-command map in the cascaded PID is
+
+\[
+\theta_{\mathrm{cmd}}=\frac{a_x}{g},
+\qquad
+\phi_{\mathrm{cmd}}=-\frac{a_y}{g},
+\qquad
+\delta F=m\,a_z.
+\]
+
+Thus \(x\) and \(y\) have the same characteristic equation: the minus sign in
+\(\phi_{\mathrm{cmd}}\) cancels the plant sign \(\ddot{y}=-g\phi\).
+
+\section{Closed-Loop Pole Equations}
+
+\subsection{Roll/Pitch Inner Loop}
+
+For roll or pitch, define the inner attitude transfer denominator
+\(D_{\mathrm{att}}(s)\). Let \(I=I_x=I_y\) and \(c=c_x=c_y\).
+
+\[
+N_{\mathrm{att}}(s)
+=
+\gammar\degc\,(K_rs+K_{ri})(K_as+K_{ai})
+\]
+
+\[
+\boxed{
+D_{\mathrm{att}}(s)
+=
+(Is^2+cs)s^2
++\gammar\degc
+\left[
+(K_rs+K_{ri})(s^2+K_as+K_{ai})
++K_{rd}s^4
+\right].
+}
+\]
+
+The inner-loop poles are the roots of \(D_{\mathrm{att}}(s)=0\).
+
+\subsection{Horizontal Closed-Loop Poles}
+
+The horizontal position and velocity controllers are
+
+\[
+C_p(s)=\frac{K_ps+K_{pi}^{\star}}{s},
+\qquad
+C_v(s)=\frac{K_vs+K_{vi}^{\star}}{s}.
+\]
+
+For either \(x\) or \(y\), the characteristic equation is
+
+\[
+\boxed{
+D_{xy}(s)
+=
+D_{\mathrm{att}}(s)s^4
++N_{\mathrm{att}}(s)(K_vs+K_{vi}^{\star})
+(s^2+K_ps+K_{pi}^{\star})=0.
+}
+\]
+
+\subsection{Vertical Closed-Loop Poles}
+
+For the vertical channel,
+
+\[
+C_{pz}(s)=\frac{K_{pz}s+K_{piz}^{\star}}{s},
+\qquad
+C_{vz}(s)=\frac{K_{vz}s+K_{viz}^{\star}}{s}.
+\]
+
+The characteristic equation is
+
+\[
+\boxed{
+D_z(s)
+=
+s^4
++(K_{vz}s+K_{viz}^{\star})
+(s^2+K_{pz}s+K_{piz}^{\star})=0.
+}
+\]
+
+
+\subsection{Yaw Closed-Loop Poles}
+
+The yaw attitude loop includes derivative-on-measurement. The characteristic
+equation is
+
+\[
+\boxed{
+\begin{aligned}
+D_{\psi}(s)
+&=
+(I_zs^2+c_zs)s^2\\
+&\quad
++\gammay\degc\,(K_rs+K_{ri})
+\left[(1+K_{ad})s^2+K_as+K_{ai}\right]=0.
+\end{aligned}
+}
+\]
+
+\subsection{Full Decoupled Pole Set}
+
+Under the hover decoupling assumptions,
+
+\[
+\boxed{
+\mathcal{P}_{\mathrm{cl}}
+=
+\mathcal{P}_{xy}
+\cup
+\mathcal{P}_{xy}
+\cup
+\mathcal{P}_{z}
+\cup
+\mathcal{P}_{\psi}.
+}
+\]
+
+The horizontal pole set appears twice, once for \(x\) and once for \(y\).
+
+\section{Numerical Characteristic Equations And Poles}
+
+\subsection{Horizontal X/Y}
+
+\[
+\begin{aligned}
+D_{xy}(s)
+&=
+8.57217021{\times}10^{-5}s^8
++4.94773616{\times}10^{-3}s^7\\
+&\quad
++3.95658893{\times}10^{-2}s^6
++7.27023216{\times}10^{-1}s^5\\
+&\quad
++2.70927427s^4
++4.32089186s^3\\
+&\quad
++3.67547329s^2
++1.06115715s
++0.00474791.
+\end{aligned}
+\]
+
+\[
+\boxed{
+\begin{aligned}
+\mathcal{P}_{xy}=\{&
+-51.744986,\ -2.005099,\ -0.499771,\ -0.00454545,\\
+&-0.908355\pm 11.714563j,\\
+&-0.823741\pm 1.011742j\}.
+\end{aligned}
+}
+\]
+
+\subsection{Vertical Z}
+
+\[
+D_z(s)=s^4+25s^3+53s^2+8.5s+0.3.
+\]
+
+\[
+\boxed{
+\mathcal{P}_{z}
+=
+\{-22.679597,\ -2.149150,\ -0.119934,\ -0.0513188\}.
+}
+\]
+
+\subsection{Yaw Psi}
+
+\[
+\begin{aligned}
+D_{\psi}(s)
+&=
+0.0000323s^4
++0.000648039042s^3\\
+&\quad
++0.00295660812s^2
++0.000876775291s
++0.0000664947655.
+\end{aligned}
+\]
+
+\[
+\boxed{
+\mathcal{P}_{\psi}
+=
+\{-13.365607,\ -6.385026,\ -0.173285,\ -0.139211\}.
+}
+\]
+
+\subsection{Main Conclusion}
+
+For the 12-state hover-linearized plant without motor lag, all closed-loop
+poles are in the open left-half plane. The slowest pole is
+
+\[
+\boxed{s=-0.00454545\ {\rm s}^{-1}},
+\]
+
+from the horizontal cascaded-integral dynamics. The full decoupled pole set
+contains \(8+8+4+4=24\) poles because it combines \(x\), \(y\), \(z\), and yaw
+channels.
+
+\section{Complete Rotor Failure Case}
+\label{sec:rotor-failure}
+
+\subsection{Rotor-Failure Model}
+
+Let the commanded rotor force vector be
+
+\[
+f_{\mathrm{cmd}}=
+\begin{bmatrix}f_1&f_2&f_3&f_4\end{bmatrix}^{T}.
+\]
+
+The healthy mixer maps rotor forces to body wrench by
+
+\[
+w =
+\begin{bmatrix}F&M_x&M_y&M_z\end{bmatrix}^{T}
+=G f,
+\]
+
+\[
+G =
+\begin{bmatrix}
+1&1&1&1\\
+-a&-a&a&a\\
+-a&a&a&-a\\
+-k&k&-k&k
+\end{bmatrix}.
+\]
+
+If rotor \(i\) completely fails, define
+
+\[
+E_i=\operatorname{diag}(1,\ldots,0,\ldots,1),
+\]
+
+where the zero is in the failed rotor's diagonal entry. The realized wrench for
+a commanded wrench is then
+
+\[
+\boxed{
+\delta w_{\mathrm{real}}
+=
+H_i\,\delta w_{\mathrm{cmd}},
+\qquad
+H_i=G E_i G^{-1}.
+}
+\]
+
+The closed-loop state used for the pole calculation is
+
+\[
+\xi =
+\begin{bmatrix}
+\delta x_{\mathrm{plant}}^{T} &
+\delta x_{\mathrm{PID\ integrators}}^{T}
+\end{bmatrix}^{T}
+\in \mathbb{R}^{24}.
+\]
+
+Because the roll/pitch rate loop uses derivative-on-measurement
+\(-K_{rd}\dot{p}\) and \(-K_{rd}\dot{q}\), the failed-actuator closed-loop model
+is most cleanly written as a descriptor system:
+
+\[
+\boxed{
+\mathcal{E}_i\dot{\xi}=\mathcal{A}_i\xi.
+}
+\]
+
+The post-failure pole set is therefore
+
+\[
+\boxed{
+\mathcal{P}_{\mathrm{fail},i}
+=
+\left\{s\in\mathbb{C}:
+\det(s\mathcal{E}_i-\mathcal{A}_i)=0
+\right\}.
+}
+\]
+
+For the default repo fault, rotor 1 fails. The corresponding commanded-wrench
+to realized-wrench map is
+
+\[
+H_1 =
+\begin{bmatrix}
+0.750000 & 7.071068 & 7.071068 & 43.915210\\
+0.008839 & 0.750000 & -0.250000 & -1.552637\\
+0.008839 & -0.250000 & 0.750000 & -1.552637\\
+0.001423 & -0.040254 & -0.040254 & 0.750000
+\end{bmatrix}.
+\]
+
+\subsection{General Case}
+
+The exact \(H_1\) matrix above has off-diagonal terms, so the failed-rotor
+system is not truly separable into independent \(x\), \(y\), \(z\), and yaw
+channels. However, if one wants the same channel-wise format as the healthy
+case, a useful approximation is to keep only the same-channel effectiveness
+terms:
+
+\[
+H_{1,\mathrm{diag}}
+=
+\operatorname{diag}(0.75,\ 0.75,\ 0.75,\ 0.75).
+\]
+
+This means each nominal channel keeps the same structure as before, but with
+75 percent control effectiveness. The resulting approximate channel poles are:
+
+\[
+\boxed{
+\begin{aligned}
+\mathcal{P}_{x,\mathrm{fail}} \approx
+\mathcal{P}_{y,\mathrm{fail}} \approx \{&
+-47.080680,\ -2.005563,\ -0.499771,\ -0.00454545,\\
+&-0.789809\pm11.754564j,\\
+&-0.823755\pm1.011763j\}.
+\end{aligned}
+}
+\]
+
+\[
+\boxed{
+\mathcal{P}_{z,\mathrm{fail}} \approx
+\{-16.341340,\ -2.237428,\ -0.119912,\ -0.0513195\}.
+}
+\]
+
+\[
+\boxed{
+\mathcal{P}_{\psi,\mathrm{fail}} \approx
+\{-7.379053\pm3.092900j,\ -0.173235,\ -0.139226\}.
+}
+\]
+
+This channel-wise view is useful for intuition: losing one rotor reduces
+effective authority and moves the fast poles. It does not replace the exact
+coupled failed-rotor pole set below.
+
+\subsection{Numerical Poles For Rotor 1 Complete Failure}
+
+For baseline cascaded PID with rotor 1 completely failed, no motor lag, and no
+saturation, the generalized eigenvalues of
+\((\mathcal{A}_1,\mathcal{E}_1)\) are
+
+\[
+\boxed{
+\begin{aligned}
+\mathcal{P}_{\mathrm{fail},1}=\{&
+-51.744986,\ -44.759105,\ -18.588507,\ -3.596782,\\
+&-2.006860,\ -2.005099,\\
+&-0.908355\pm 11.714563j,\\
+&-0.824472\pm 1.009904j,\\
+&-0.823741\pm 1.011742j,\\
+&-0.616459\pm 11.154612j,\\
+&-0.499771,\ -0.499752,\\
+&-0.142809\pm0.014255j,\\
+&-0.010123,\ -0.00454545,\ -0.00454545,\\
+&-6.72622\times10^{-5},\\
+&3.36299\times10^{-5}\pm5.80496\times10^{-5}j
+\}.
+\end{aligned}
+}
+\]
+
+The last complex pair:
+
+\[
+\boxed{
+s=3.36299\times10^{-5}\pm5.80496\times10^{-5}j.
+}
+\]
+
+lies in the right-half plane.
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.18\linewidth}
+                  >{\raggedright\arraybackslash}p{0.24\linewidth}
+                  >{\raggedright\arraybackslash}p{0.42\linewidth}}
+\toprule
+Failed rotor & Largest real part & Low-frequency unstable mode \\
+\midrule
+\endfirsthead
+\toprule
+Failed rotor & Largest real part & Low-frequency unstable mode \\
+\midrule
+\endhead
+1 & \(3.36299\times10^{-5}\) &
+\(3.36299\times10^{-5}\pm5.80496\times10^{-5}j\) \\
+2 & \(3.36299\times10^{-5}\) &
+\(3.36299\times10^{-5}\pm5.80496\times10^{-5}j\) \\
+3 & \(9.73686\times10^{-5}\) &
+\(9.73686\times10^{-5}\) \\
+4 & \(3.36299\times10^{-5}\) &
+\(3.36299\times10^{-5}\pm5.80496\times10^{-5}j\) \\
+\bottomrule
+\end{longtable}
+
+Thus any single complete rotor failure makes the baseline full-yaw cascaded PID
+lose local asymptotic stability in this small-signal model.
+
+\subsection{If Yaw Is Removed From The Model}
+
+If yaw is not considered, remove the yaw state, yaw controller, and commanded
+yaw moment, and keep the exact failed-rotor coupling from commanded
+\([F,M_x,M_y]^T\) to realized \([F,M_x,M_y]^T\):
+
+\[
+H_{1,xyz} =
+\begin{bmatrix}
+0.750000 & 7.071068 & 7.071068\\
+0.008839 & 0.750000 & -0.250000\\
+0.008839 & -0.250000 & 0.750000
+\end{bmatrix}.
+\]
+
+The resulting 20-state \(x/y/z\) closed-loop model has poles
+
+\[
+\boxed{
+\begin{aligned}
+\mathcal{P}_{xyz,\mathrm{fail},1}=\{&
+-51.744986,\ -43.636141,\ -9.289775,\ -2.480127,\\
+&-2.006220,\ -2.005099,\\
+&-0.908355\pm11.714563j,\\
+&-0.823827\pm1.011870j,\\
+&-0.823741\pm1.011742j,\\
+&-0.321372\pm11.630657j,\\
+&-0.499771,\ -0.499771,\\
+&-0.119868,\ -0.0513210,\\
+&-0.00454545,\ -0.00454545
+\}.
+\end{aligned}
+}
+\]
+
+% All of these poles are in the left-half plane. Thus, in this local model, the
+% instability caused by complete rotor failure is tied to trying to keep the full
+% yaw channel in the loop. Once yaw is removed, the \(x/y/z\) subsystem can be
+% locally stable, although the real vehicle can still spin in yaw and the
+% allocator can still saturate.
+
+% \section{What Motor Lag Changes}
+% \label{sec:motor-lag}
+
+% \subsection{Does The Current Simulation Include Motor Lag?}
+
+% Yes. In \code{model/quadcopter.py}, the runtime path is
+
+% \[
+% \text{PWM command}
+% \rightarrow
+% \text{desired rotor thrust}
+% \rightarrow
+% \text{first-order thrust lag}
+% \rightarrow
+% \text{realized wrench}
+% \rightarrow
+% \text{state dynamics}.
+% \]
+
+% The first-order lag is asymmetric:
+
+% \[
+% \tau =
+% \begin{cases}
+% 0.025\ {\rm s}, & \text{if desired rotor thrust is increasing},\\
+% 0.040\ {\rm s}, & \text{if desired rotor thrust is decreasing}.
+% \end{cases}
+% \]
+
+% This means the runtime simulator is piecewise/nonlinear even near hover. There
+% is no unique exact LTI motor-lag pole set unless we freeze \(\tau\).
+
+% \subsection{Frozen-Tau Pole Equations}
+
+% If one freezes the actuator as
+
+% \[
+% P_m(s)=\frac{1}{\tau s+1},
+% \]
+
+% then motor lag modifies the characteristic denominators as follows:
+
+% \[
+% \boxed{
+% D_{\mathrm{att},\tau}(s)
+% =
+% (\tau s+1)(Is^2+cs)s^2
+% +\gammar\degc
+% \left[
+% (K_rs+K_{ri})(s^2+K_as+K_{ai})
+% +K_{rd}s^4
+% \right].
+% }
+% \]
+
+% \[
+% \boxed{
+% D_{xy,\tau}(s)
+% =
+% D_{\mathrm{att},\tau}(s)s^4
+% +N_{\mathrm{att}}(s)(K_vs+K_{vi}^{\star})
+% (s^2+K_ps+K_{pi}^{\star}).
+% }
+% \]
+
+% \[
+% \boxed{
+% D_{z,\tau}(s)
+% =
+% (\tau s+1)s^4
+% +(K_{vz}s+K_{viz}^{\star})
+% (s^2+K_{pz}s+K_{piz}^{\star}).
+% }
+% \]
+
+% \[
+% \boxed{
+% \begin{aligned}
+% D_{\psi,\tau}(s)
+% &=
+% (\tau s+1)(I_zs^2+c_zs)s^2\\
+% &\quad
+% +\gammay\degc\,(K_rs+K_{ri})
+% \left[(1+K_{ad})s^2+K_as+K_{ai}\right].
+% \end{aligned}
+% }
+% \]
+
+% \subsection{Frozen-Tau Numerical Poles}
+
+% \begin{longtable}{>{\raggedright\arraybackslash}p{0.18\linewidth}
+%                   >{\raggedright\arraybackslash}p{0.74\linewidth}}
+% \toprule
+% Case & Poles \\
+% \midrule
+% \(\tau=0.025,\ x/y\) &
+% \(-68.740586\pm50.651764j,\ -2.005029,\ -0.956482\pm11.817861j,\ -0.823742\pm1.011739j,\ -0.499771,\ -0.00454545\) \\
+% \(\tau=0.025,\ z\) &
+% \(-18.846238\pm23.610824j,\ -2.136270,\ -0.119934,\ -0.0513188\) \\
+% \(\tau=0.025,\ \psi\) &
+% \(-17.020042\pm17.463897j,\ -5.740299,\ -0.173285,\ -0.139211\) \\
+% \midrule
+% \(\tau=0.040,\ x/y\) &
+% \(-41.809302\pm52.511293j,\ -2.004987,\ -0.987670\pm11.883022j,\ -0.823743\pm1.011738j,\ -0.499771,\ -0.00454545\) \\
+% \(\tau=0.040,\ z\) &
+% \(-11.349993\pm21.061735j,\ -2.128761,\ -0.119934,\ -0.0513188\) \\
+% \(\tau=0.040,\ \psi\) &
+% \(-9.638974\pm17.170464j,\ -5.502435,\ -0.173286,\ -0.139211\) \\
+% \bottomrule
+% \end{longtable}
+
+% The practical interpretation is: motor lag mainly adds or moves fast actuator
+% poles. It barely changes the slowest closed-loop poles in this tuning. For a
+% simulation-consistent small-signal discussion, report the frozen-\(\tau\) poles
+% as a piecewise approximation; for the repo's nominal 12-state hover model,
+% report the healthy-case poles in Section 4.
+
+\end{document}

@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.venv/
+.conda/
+.cursor/
+.pytest_cache/
+*.egg-info/
+build/
+
+# Run archives (sim/archive.py); set SIM_RESULTS_DIR to keep them elsewhere.
+results/
+
+# runsim.py --record output
+*.mp4
+*.gif
+
+# LaTeX intermediates and in-place PDFs (keep *.tex)
+*.aux
+*.fdb_latexmk
+*.fls
+*.synctex.gz
+docs/latex/*.log
+docs/latex/*.out
+docs/latex/*.pdf

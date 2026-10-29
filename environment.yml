@@ -1,0 +1,27 @@
+# Reference conda environment (macOS arm64): the exact builds the golden
+# trajectories in tests/golden/ were captured with (NumPy 2.4.6 linked against
+# OpenBLAS 0.3.31).  Any recent NumPy/SciPy also works; the golden tests allow
+# for the small differences between BLAS builds.
+#
+#   conda env create -p ./.conda -f environment.yml
+#   ./.conda/bin/python -m unittest discover -s tests -t .
+#
+# On another platform drop the build strings (the part after the second "=").
+channels:
+  - defaults
+dependencies:
+  - python=3.14.6=h80e0c04_101_cp314
+  - numpy=2.4.6=py314hd8d2248_0
+  - numpy-base=2.4.6=py314hb4b2851_0
+  - libopenblas=0.3.31=h7813bb4_3
+  - blas=1.0=openblas
+  - scipy=1.18.0=py314h157f364_0
+  - matplotlib=3.11.0
+  - pillow=12.3.0
+  - pyyaml=6.0.3
+  - pyqt=6.11.0
+  - pip
+  - pip:
+      # live 3D view (python runsim.py)
+      - pyqtgraph==0.13.7
+      - PyOpenGL==3.1.9

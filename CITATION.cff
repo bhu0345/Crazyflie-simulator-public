@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: "If you use this simulator in your research, please cite it as below."
+type: software
+title: "Crazyflie Simulator: a Python testbed for Crazyflie control and robustness experiments"
+authors:
+  - family-names: Hu
+    given-names: Bingtao
+version: 0.1.0
+license: MIT
+keywords:
+  - quadrotor
+  - Crazyflie
+  - flight control
+  - simulation
+  - fault tolerance
+  - benchmark

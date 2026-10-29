@@ -1,0 +1,13 @@
+# Tested pip environment (Python 3.12).  `pip install -e .[gui,dev]` installs
+# the same packages with looser bounds (see pyproject.toml); environment.yml
+# is the conda alternative.
+numpy==2.2.6
+scipy==1.15.3
+matplotlib==3.10.3
+pillow==11.2.1
+PyYAML==6.0.2
+
+# Live 3D view (python runsim.py); not needed for headless runs or tests.
+pyqtgraph==0.13.7
+PyOpenGL==3.1.9
+PyQt6==6.9.1

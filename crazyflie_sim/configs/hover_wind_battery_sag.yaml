@@ -1,0 +1,6 @@
+# hover_wind_default with the first-order battery-voltage sag model on.
+# Remaining sag knobs keep their model/params.py defaults.
+extends: hover_wind_default.yaml
+name: hover_wind_battery_sag
+params_overrides:
+  battery_sag_enabled: true

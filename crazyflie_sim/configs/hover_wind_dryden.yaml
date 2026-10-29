@@ -1,0 +1,7 @@
+# hover_wind_default with Ornstein-Uhlenbeck (Dryden-like) gusts on x and y.
+extends: hover_wind_default.yaml
+name: hover_wind_dryden
+wind:
+  dryden_seed: 42
+  x: {mode: dryden, dryden_sigma: 0.05, dryden_tau: 1.0, offset: 0.0}
+  y: {mode: dryden, dryden_sigma: 0.05, dryden_tau: 1.0, offset: 0.0}

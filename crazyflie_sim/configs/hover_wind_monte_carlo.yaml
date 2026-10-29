@@ -1,0 +1,20 @@
+# hover_wind_default flown n_runs times with resampled model parameters.
+#   python -m experiments.compare configs/hover_wind_monte_carlo.yaml --monte-carlo
+# dist: uniform {low, high} | normal {mean, std, clip}; mode: absolute | scale
+# ("I" only accepts scale: three factors on the nominal inertia diagonal).
+# mass, I and the motor lags perturb the plant only (plant_overrides): the
+# controllers keep the profile's nominal values, so each replicate is a model
+# mismatch.  The drag factors and battery voltage are model.params leaves.
+extends: hover_wind_default.yaml
+name: hover_wind_monte_carlo
+monte_carlo:
+  n_runs: 10
+  seed: 7
+  perturb:
+    mass: {dist: uniform, low: 0.038, high: 0.042}
+    I: {dist: uniform, low: 0.95, high: 1.05, mode: scale}
+    aero_drag_factor_xy: {dist: normal, mean: 0.00539, std: 0.000539, clip: [0.004312, 0.006468]}
+    aero_drag_factor_z: {dist: normal, mean: 0.00637, std: 0.000637, clip: [0.005096, 0.007644]}
+    motor_tau_up: {dist: uniform, low: 0.0375, high: 0.0625}
+    motor_tau_down: {dist: uniform, low: 0.0375, high: 0.0625}
+    battery_voltage_nominal: {dist: uniform, low: 3.7, high: 4.0}

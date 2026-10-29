@@ -1,0 +1,51 @@
+[project]
+name = "crazyflie-simulator"
+version = "0.1.0"
+description = "Crazyflie quadrotor simulator for testing and visualizing control algorithms"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Bingtao Hu" }]
+keywords = ["quadrotor", "crazyflie", "flight control", "simulation", "benchmark"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Education",
+    "Topic :: Scientific/Engineering",
+]
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=2.2",
+    "scipy>=1.15",
+    "matplotlib>=3.10",
+    "pillow>=11",
+    "PyYAML>=6",
+]
+
+[project.optional-dependencies]
+gui = ["pyqtgraph>=0.13", "PyOpenGL>=3.1", "PyQt6>=6.9"]
+dev = ["pytest>=8", "setuptools>=77"]
+
+[project.scripts]
+crazyflie-sim = "crazyflie_sim.runsim:main"
+crazyflie-compare = "crazyflie_sim.experiments.compare:main"
+crazyflie-benchmark = "crazyflie_sim.experiments.benchmark:main"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["crazyflie_sim", "crazyflie_sim.configs", "crazyflie_sim.configs.benchmark",
+            "crazyflie_sim.controllers", "crazyflie_sim.estimation", "crazyflie_sim.experiments",
+            "crazyflie_sim.model", "crazyflie_sim.sim", "crazyflie_sim.tools",
+            "crazyflie_sim.utils", "crazyflie_sim.visualization"]
+
+[tool.setuptools.package-data]
+"crazyflie_sim.configs" = ["*.yaml"]
+"crazyflie_sim.configs.benchmark" = ["*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

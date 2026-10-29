@@ -1,0 +1,7 @@
+# Benchmark 3: rotor 1 loses half its power at 2 s while hovering at 1 m.
+name: partial_loss
+sim_mode: hover_rotor_fault
+duration_s: 8.0
+initial_pos: [0.0, 0.0, 1.0]
+hover_setpoint: [0.0, 0.0, 1.0]
+rotor_fault: {case: power_loss_50pct, rotor: 1, start_time_s: 2.0}

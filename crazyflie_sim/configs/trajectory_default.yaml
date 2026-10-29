@@ -1,0 +1,21 @@
+# Minimum-snap trajectory through four waypoints with yaw changes.
+# Without duration_s the run lasts path length / trajectory_speed + 2 s.
+#
+#   python runsim.py configs/trajectory_default.yaml
+
+name: trajectory_default
+
+sim_mode: trajectory
+# The PID and Mellinger track this path within 2 cm; the LQR
+# (full_state_feedback), linearized about hover, trails by up to 0.4 m.
+controller_mode: mellinger
+
+trajectory_speed: 0.5  # m/s along the trajectory
+
+waypoint_source: list
+# Rows are [x, y, z, yaw]; yaw in radians.
+user_waypoints:
+  - [0.0, 0.2, 0.3, 0.5233]
+  - [-0.2, 0.3, 0.5, 1.0466]
+  - [-0.3, 0.5, 1.0, 1.5699]
+  - [-0.5, 0.5, 1.5, 1.0466]

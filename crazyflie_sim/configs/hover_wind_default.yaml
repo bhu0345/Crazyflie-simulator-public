@@ -1,0 +1,23 @@
+# Hover at 1 m, then three slow sinusoidal wind forces from t = 2 s (0.15 N
+# lateral, about 40 % of the 40 g vehicle's weight).
+# The other hover_wind_*.yaml files extend this one.
+#
+#   python runsim.py configs/hover_wind_default.yaml
+#   python -m experiments.compare configs/hover_wind_default.yaml
+
+name: hover_wind_default
+sim_mode: hover_wind
+controller_mode: baseline
+duration_s: 50.0
+hover_setpoint: [0.0, 0.0, 1.0]
+hover_yaw: 0.0
+
+# Per-axis waveforms (model/wind.py).  Forces in N.
+wind:
+  start_time: 2.0
+  x: {mode: sin, amplitude: 0.15, frequency_hz: 0.1}
+  y: {mode: sin, amplitude: 0.15, frequency_hz: 0.05}
+  z: {mode: sin, amplitude: 0.04, frequency_hz: 0.5}
+
+rotor_fault:
+  enabled: false

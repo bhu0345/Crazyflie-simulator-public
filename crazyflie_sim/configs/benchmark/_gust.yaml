@@ -1,0 +1,15 @@
+# Shared base of the benchmark hover scenarios (not a scenario itself; files
+# starting with "_" are skipped).  Hover at 1 m from t = 0; from 2 s a 0.1 N
+# lateral gust (a quarter of the 40 g vehicle's weight, about 14 deg of tilt to
+# hold) ramps in on x over 0.3 s, with seeded Dryden turbulence on y.
+sim_mode: hover_wind
+duration_s: 10.0
+initial_pos: [0.0, 0.0, 1.0]
+hover_setpoint: [0.0, 0.0, 1.0]
+hover_yaw: 0.0
+wind:
+  start_time: 2.0
+  dryden_seed: 7
+  x: {mode: smoothstep, smoothstep_magnitude: 0.1, smoothstep_rise_time: 0.3}
+  y: {mode: dryden, dryden_sigma: 0.03, dryden_tau: 1.0, offset: 0.0}
+  z: {mode: "off"}

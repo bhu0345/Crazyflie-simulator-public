@@ -1,0 +1,27 @@
+# hover_wind_default, but the controller closes the loop on the state
+# estimate (IMU + mocap, complementary filter) instead of the true state.
+# In a comparison every controller gets the same seed, so all of them see
+# the same noise realization.  On this filter the LQR holds the hover within
+# 0.07 m; the PID's error peaks near 0.8 m and Mellinger's near 0.3 m.
+extends: hover_wind_default.yaml
+name: hover_wind_estimator
+controller_mode: full_state_feedback
+seed: 42
+estimator:
+  enabled: true
+  backend: complementary
+  imu:
+    gyro_noise_std: 0.005   # rad/s white noise per axis
+    gyro_bias_std: 0.02     # rad/s constant turn-on bias
+    accel_noise_std: 0.1    # m/s^2 white noise per axis
+    accel_bias_std: 0.05    # m/s^2 constant bias
+  mocap:
+    rate_hz: 100.0
+    pos_noise_std: 0.002    # m per axis
+    att_noise_std: 0.01     # rad per axis
+    delay_steps: 2          # samples (~20 ms at 100 Hz)
+  gains:
+    k_pos: 0.4
+    k_vel: 0.1
+    k_att: 0.3
+    k_bias: 0.01

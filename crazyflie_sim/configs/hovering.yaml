@@ -1,0 +1,16 @@
+# Nominal hover from 1 m, without external disturbances or rotor faults.
+name: hovering
+sim_mode: hovering
+controller_mode: baseline
+duration_s: 20.0
+initial_pos: [0.0, 0.0, 1.0]
+hover_setpoint: [0.0, 0.0, 1.0]
+hover_yaw: 0.0
+
+wind:
+  x: {mode: "off"}
+  y: {mode: "off"}
+  z: {mode: "off"}
+
+rotor_fault:
+  enabled: false

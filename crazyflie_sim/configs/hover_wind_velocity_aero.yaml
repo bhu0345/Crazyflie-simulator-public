@@ -1,0 +1,14 @@
+# Wind as a VELOCITY field (m/s) acting through the aero model (relative
+# airflow), with rotor-induced drag, body-frame drag and ground effect on.
+extends: hover_wind_default.yaml
+name: hover_wind_velocity_aero
+wind:
+  as_velocity: true
+  dryden_seed: 42
+  x: {mode: dryden, dryden_sigma: 0.5, dryden_tau: 1.0, offset: 1.5}  # 1.5 m/s mean in +x
+  y: {mode: dryden, dryden_sigma: 0.5, dryden_tau: 1.0, offset: 0.0}
+  z: {mode: "off"}  # quoted: bare `off` is YAML false
+params_overrides:
+  rotor_drag_enabled: true
+  body_frame_drag_enabled: true
+  ground_effect_enabled: true

@@ -1,0 +1,14 @@
+# Hover at 1 m; rotor 1 loses half its power at 3 s.
+#
+#   python runsim.py configs/hover_rotor_fault_default.yaml
+#   python -m experiments.compare configs/hover_rotor_fault_default.yaml \
+#       --fault-cases power_loss_25pct power_loss_50pct
+
+name: hover_rotor_fault_default
+sim_mode: hover_rotor_fault
+controller_mode: baseline
+duration_s: 12.0
+initial_pos: [0.0, 0.0, 1.0]
+hover_setpoint: [0.0, 0.0, 1.0]
+hover_yaw: 0.0
+rotor_fault: {case: power_loss_50pct, rotor: 1, start_time_s: 3.0}

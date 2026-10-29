@@ -1,0 +1,3 @@
+# Benchmark 1: disturbance rejection on the true state.
+extends: _gust.yaml
+name: hover_gust

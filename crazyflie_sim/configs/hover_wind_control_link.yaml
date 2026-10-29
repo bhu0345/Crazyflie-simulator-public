@@ -1,0 +1,13 @@
+# Command-link imperfections: 4 ms delay, 2 % dropouts, timing jitter.  The
+# PID and Mellinger ride it out; try --controller full_state_feedback to see
+# the LQR, tuned without the delay, lose the vehicle.
+extends: hover_wind_default.yaml
+name: hover_wind_control_link
+controller_mode: baseline
+duration_s: 10.0
+control_link:
+  enabled: true
+  delay_steps: 2          # 2 * 2 ms
+  dropout_probability: 0.02
+  jitter_std_steps: 0.5
+  seed: 0

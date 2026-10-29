@@ -1,0 +1,11 @@
+# Benchmark 4: rotor 1 fails completely at 2 s.  Flown on the thrust-rich
+# airframe (0.5 N per rotor): with the default 0.2 N rotors no controller can
+# hold a three-rotor hover, so that case would not tell controllers apart.
+# Survival and position matter; yaw is free after a complete loss.
+name: complete_loss
+sim_mode: hover_rotor_fault
+duration_s: 8.0
+initial_pos: [0.0, 0.0, 1.0]
+hover_setpoint: [0.0, 0.0, 1.0]
+actuator_profile: crazyflie21_thrust_rich
+rotor_fault: {case: failure, rotor: 1, start_time_s: 2.0}

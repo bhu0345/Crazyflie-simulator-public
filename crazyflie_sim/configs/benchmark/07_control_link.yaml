@@ -1,0 +1,10 @@
+# Benchmark 7: the gust of benchmark 1 through an imperfect command link:
+# 6 ms delay, 5 % dropped commands (the last one is held) and timing jitter.
+extends: _gust.yaml
+name: control_link
+control_link:
+  enabled: true
+  delay_steps: 3
+  dropout_probability: 0.05
+  jitter_std_steps: 0.5
+  seed: 0
