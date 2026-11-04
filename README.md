@@ -53,9 +53,13 @@ survives the benchmark's complete single-rotor failure.
 
 ## Quick start
 
-From the repository root, with Python 3.11 or newer:
+From the repository root, with Python 3.11 or newer.  First create and
+activate a virtual environment, so the simulator's dependencies stay out of
+your system or conda base Python:
 
 ```bash
+python3 -m venv .venv                              # once
+source .venv/bin/activate                          # every new shell (Windows: .venv\Scripts\activate)
 pip install -e ".[gui,dev]"                        # live view and test dependencies
 # For headless experiments only: pip install -e .
 
@@ -80,10 +84,11 @@ path, or the name of a config bundled in `crazyflie_sim/configs/` (as above;
 adds the commands `crazyflie-sim` (the same as `python runsim.py`),
 `crazyflie-compare` and `crazyflie-benchmark`, which work from any directory.
 
-For the tested Python 3.12 pip dependency set, use
-`pip install -r requirements.txt`. For the reference conda environment, run
-`conda env create -p ./.conda -f environment.yml`, then use
-`./.conda/bin/python` for the commands above. That file pins macOS arm64
+Other environments: inside the activated `.venv`,
+`pip install -r requirements.txt` gives the tested Python 3.12 dependency set
+(then `pip install -e . --no-deps`).  With conda instead of venv, run
+`conda env create -p ./.conda -f environment.yml` and `conda activate ./.conda`
+(the reference environment), then `pip install -e . --no-deps`. That file pins macOS arm64
 builds; other platforms need the build strings removed. Numerical results
 can vary slightly with the NumPy/BLAS build, so keep the environment fixed
 when comparing revisions.
