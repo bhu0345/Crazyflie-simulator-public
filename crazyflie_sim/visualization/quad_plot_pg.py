@@ -381,56 +381,6 @@ def _frame_rotation_and_origin(frame):
 # ---------------------------------------------------------------------------
 
 
-def _box_mesh(sx, sy, sz, center=(0.0, 0.0, 0.0), rot_z_deg=0.0):
-    hx, hy, hz = sx / 2.0, sy / 2.0, sz / 2.0
-    verts = np.array(
-        [
-            [-hx, -hy, -hz],
-            [hx, -hy, -hz],
-            [hx, hy, -hz],
-            [-hx, hy, -hz],
-            [-hx, -hy, hz],
-            [hx, -hy, hz],
-            [hx, hy, hz],
-            [-hx, hy, hz],
-        ],
-        dtype=float,
-    )
-    faces = np.array(
-        [
-            [0, 1, 2], [0, 2, 3],  # bottom
-            [4, 6, 5], [4, 7, 6],  # top
-            [0, 4, 5], [0, 5, 1],  # -y
-            [1, 5, 6], [1, 6, 2],  # +x
-            [2, 6, 7], [2, 7, 3],  # +y
-            [3, 7, 4], [3, 4, 0],  # -x
-        ],
-        dtype=np.int32,
-    )
-    if rot_z_deg:
-        a = np.radians(rot_z_deg)
-        c, s = np.cos(a), np.sin(a)
-        rot = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
-        verts = verts @ rot.T
-    return verts + np.asarray(center, dtype=float), faces
-
-
-def _cylinder_mesh(radius, height, center=(0.0, 0.0, 0.0), sides=18):
-    angles = np.linspace(0.0, 2.0 * np.pi, sides, endpoint=False)
-    ring = np.column_stack((radius * np.cos(angles), radius * np.sin(angles)))
-    bottom = np.column_stack((ring, np.full(sides, -height / 2.0)))
-    top = np.column_stack((ring, np.full(sides, height / 2.0)))
-    verts = np.vstack((bottom, top))
-    faces = []
-    for i in range(sides):
-        j = (i + 1) % sides
-        faces.append([i, j, sides + j])
-        faces.append([i, sides + j, sides + i])
-        faces.append([0, j, i])  # bottom cap fan (rough but shaded flat)
-        faces.append([sides, sides + i, sides + j])  # top cap fan
-    return verts + np.asarray(center, dtype=float), np.asarray(faces, dtype=np.int32)
-
-
 def _disc_mesh(radius, center=(0.0, 0.0, 0.0), sides=36):
     angles = np.linspace(0.0, 2.0 * np.pi, sides, endpoint=False)
     ring = np.column_stack(
@@ -476,6 +426,90 @@ def _sphere_mesh(radius, center=(0.0, 0.0, 0.0), segments=16, rings=10):
         np.asarray(verts, dtype=float) + np.asarray(center, dtype=float),
         np.asarray(faces, dtype=np.int32),
     )
+
+
+def _prism_mesh(polygon, z0, z1):
+    """A convex polygon (counter-clockwise in the xy plane) extruded from z0 to z1."""
+    poly = np.asarray(polygon, dtype=float)
+    n = len(poly)
+    centroid = poly.mean(axis=0)
+    verts = np.vstack((
+        np.column_stack((poly, np.full(n, z0))),
+        np.column_stack((poly, np.full(n, z1))),
+        [[centroid[0], centroid[1], z0], [centroid[0], centroid[1], z1]],
+    ))
+    bottom, top = 2 * n, 2 * n + 1
+    faces = []
+    for i in range(n):
+        j = (i + 1) % n
+        faces += [[i, j, n + j], [i, n + j, n + i], [bottom, j, i], [top, n + i, n + j]]
+    return verts, np.asarray(faces, dtype=np.int32)
+
+
+def _circle(radius, cx=0.0, cy=0.0, sides=20):
+    a = np.linspace(0.0, 2.0 * np.pi, sides, endpoint=False)
+    return np.column_stack((cx + radius * np.cos(a), cy + radius * np.sin(a)))
+
+
+def _rounded_rect(sx, sy, r, segments=4):
+    """Counter-clockwise outline of an sx-by-sy rectangle with corner radius r."""
+    hx, hy = sx / 2.0 - r, sy / 2.0 - r
+    points = []
+    for (cx, cy), start in (((hx, -hy), -90.0), ((hx, hy), 0.0), ((-hx, hy), 90.0), ((-hx, -hy), 180.0)):
+        for a in np.radians(np.linspace(start, start + 90.0, segments + 1)):
+            points.append((cx + r * np.cos(a), cy + r * np.sin(a)))
+    return np.asarray(points)
+
+
+def _place(mesh, rot_z_deg=0.0, offset=(0.0, 0.0, 0.0)):
+    verts, faces = mesh
+    a = np.radians(rot_z_deg)
+    rot = np.array([[np.cos(a), -np.sin(a), 0.0], [np.sin(a), np.cos(a), 0.0], [0.0, 0.0, 1.0]])
+    return verts @ rot.T + np.asarray(offset, dtype=float), faces
+
+
+def _merge_meshes(meshes):
+    verts, faces, offset = [], [], 0
+    for v, f in meshes:
+        verts.append(v)
+        faces.append(f + offset)
+        offset += len(v)
+    return np.vstack(verts), np.vstack(faces)
+
+
+def _propeller_mesh(radius, z, pitch_deg, direction):
+    """Two-blade propeller around the z axis: hub plus flat, pitched blades."""
+    t = np.array([0.0, 0.15, 0.35, 0.55, 0.75, 0.9, 1.0])
+    chord = 0.0075 * np.array([0.55, 0.85, 1.0, 0.95, 0.8, 0.62, 0.35])  # convex outline
+    r = 0.0025 + t * (radius - 0.0025)
+    outline = np.vstack((np.column_stack((r, -chord / 2)), np.column_stack((r, chord / 2))[::-1]))
+    blade_v, blade_f = _prism_mesh(outline, -0.0004, 0.0004)
+    a = np.radians(pitch_deg) * direction  # twist follows the spin direction
+    pitch = np.array([[1.0, 0.0, 0.0], [0.0, np.cos(a), -np.sin(a)], [0.0, np.sin(a), np.cos(a)]])
+    blade = (blade_v @ pitch.T, blade_f)
+    hub = _prism_mesh(_circle(0.0028, sides=16), -0.0013, 0.0013)
+    return _place(_merge_meshes([hub, blade, _place(blade, 180.0)]), offset=(0.0, 0.0, z))
+
+
+def _studio_shader():
+    """Name of a mesh shader like pyqtgraph's "shaded", with a softer two-sided
+    light from the viewer's upper left so dark parts keep their shape.  Falls
+    back to "shaded" if pyqtgraph's built-in shader ever changes."""
+    from pyqtgraph.opengl import shaders
+
+    name = "crazyflie_studio"
+    if name in shaders.ShaderProgram.names:
+        return name
+    base = shaders.getShaderProgram("shaded")
+    vert = next(sh.code for sh in base.shaders if isinstance(sh, shaders.VertexShader))
+    frag = next(sh.code for sh in base.shaders if isinstance(sh, shaders.FragmentShader))
+    light, shade = "normalize(vec3(1.0, -1.0, -1.0))", "p = p < 0. ? 0. : p * 0.8;"
+    if light not in frag or shade not in frag:
+        return "shaded"
+    frag = frag.replace(light, "normalize(vec3(-0.4, 0.6, 1.0))").replace(
+        shade, "p = 0.3 + 0.6 * max(p, 0.0) + 0.2 * max(-p, 0.0);")
+    shaders.ShaderProgram(name, [shaders.VertexShader(vert), shaders.FragmentShader(frag)])
+    return name
 
 
 def _grid_lines(half_size, spacing):
@@ -622,11 +656,10 @@ class _PyQtGraphQuadWindow:
 
     # Crazyflie-scale body geometry (meters, body frame: +x forward, z up).
     _XY = 0.05 / np.sqrt(2.0)  # motor x/y offset (arm_length / sqrt(2))
-    _ARM_LEN = 0.10  # motor-to-motor diagonal
-    _MOTOR_R = 0.0042
-    _MOTOR_H = 0.007
-    _PROP_R = 0.023
-    _PROP_Z = 0.0085
+    _PCB_T = 0.0016  # board thickness
+    _PROP_Z = 0.0118  # propeller plane above the bottom of the PCB
+    COLOR_PCB = (0.16, 0.17, 0.19, 1.0)  # black solder mask, lifted off the dark scene
+    COLOR_PROP = (0.72, 0.95, 0.22, 1.0)  # Bitcraze's lime-green propellers
     _PROP_DIRS = (1.0, -1.0, 1.0, -1.0)  # m1/m3 CCW, m2/m4 CW (viewed from above)
 
     def __init__(
@@ -1231,82 +1264,93 @@ class _PyQtGraphQuadWindow:
             faces=faces,
             smooth=smooth,
             color=color,
-            shader="shaded",
+            shader=_studio_shader(),
             glOptions=gl_options,
         )
         self.view.addItem(item)
         return item
 
     def _build_body(self):
-        """Rigid-body mesh set in body frame; transformed per frame in _set_frame."""
+        """The Crazyflie 2.1 Brushless (legs variant) in the body frame: metres,
+        +x forward, +y left, z up from the bottom of the PCB, drawn BODY_SCALE
+        times larger.  Transformed every frame in _update_body.
+
+        Sizes follow Bitcraze's datasheet and product photos: a 100 mm
+        motor-to-motor frame, a 39 x 31 mm board with tapered PCB arms, the two
+        expansion headers with the battery between them, 08028 motors on round
+        pads, 55 mm two-blade propellers and a leg loop under each motor.
+        """
         xy = self._XY
+        pcb = self._PCB_T
         components = []
 
-        def add(verts, faces, color, smooth=True, gl_options="opaque",
-                spin_center=None, spin_dir=0.0):
+        def add(mesh, color, smooth=False, gl_options="opaque", spin_center=None, spin_dir=0.0):
+            verts, faces = mesh
             verts = verts * self.BODY_SCALE
             if spin_center is not None:
                 spin_center = np.asarray(spin_center, dtype=float) * self.BODY_SCALE
             item = self._add_mesh(verts, faces, color, smooth, gl_options)
-            components.append(
-                {
-                    "item": item,
-                    "verts": verts,
-                    "faces": faces,
-                    "spin_center": spin_center,
-                    "spin_dir": spin_dir,
-                }
-            )
+            components.append({"item": item, "verts": verts, "faces": faces,
+                               "spin_center": spin_center, "spin_dir": spin_dir})
 
-        # Central hub + two diagonal arms (carbon frame).
-        v, f = _box_mesh(0.034, 0.034, 0.009, center=(0, 0, 0.002))
-        add(v, f, (0.78, 0.82, 0.88, 1.0), smooth=False)
-        v, f = _box_mesh(self._ARM_LEN, 0.006, 0.0035, rot_z_deg=45.0)
-        add(v, f, (0.58, 0.63, 0.71, 1.0), smooth=False)
-        v, f = _box_mesh(self._ARM_LEN, 0.006, 0.0035, rot_z_deg=-45.0)
-        add(v, f, (0.58, 0.63, 0.71, 1.0), smooth=False)
+        def box(sx, sy, sz, x, y, z0, rot=0.0):
+            return _place(_prism_mesh(_rounded_rect(sx, sy, 1e-4, 1), z0, z0 + sz), rot, (x, y, 0.0))
 
-        # Real Crazyflie 2.x layout (+x forward, +y left): m1 front-right,
-        # m2 rear-right, m3 rear-left, m4 front-left (model/params.py
-        # body_frame order).
-        motor_positions = [(xy, -xy), (-xy, -xy), (-xy, xy), (xy, xy)]
-        cap_colors = [
-            _gl_color("#ff8a3d"),  # m1/m4 are +x (front): warm accent
-            _gl_color("#5aa2ff"),  # m2/m3 rear: cool
-            _gl_color("#5aa2ff"),
-            _gl_color("#ff8a3d"),
-        ]
-        prop_colors = [
-            _gl_color("#ff8a3d", 0.40),
-            _gl_color("#5aa2ff", 0.40),
-            _gl_color("#5aa2ff", 0.40),
-            _gl_color("#ff8a3d", 0.40),
-        ]
-        # body_frame order: m1(+x,-y) m2(-x,-y) m3(-x,+y) m4(+x,+y)
-        front = (True, False, False, True)
-        for i, (mx, my) in enumerate(motor_positions):
-            v, f = _cylinder_mesh(
-                self._MOTOR_R, self._MOTOR_H, center=(mx, my, self._MOTOR_H / 2.0)
-            )
-            add(v, f, (0.30, 0.34, 0.41, 1.0))
-            v, f = _cylinder_mesh(
-                self._MOTOR_R * 1.02, 0.0018, center=(mx, my, self._MOTOR_H + 0.001)
-            )
-            add(
-                v, f,
-                cap_colors[i] if front[i] else cap_colors[i],
-                smooth=True,
-            )
-            v, f = _disc_mesh(self._PROP_R, center=(mx, my, self._PROP_Z))
-            add(
-                v, f,
-                prop_colors[i],
-                smooth=False,
-                gl_options="translucent",
-                spin_center=np.array([mx, my, self._PROP_Z]),
-                spin_dir=self._PROP_DIRS[i],
-            )
+        def on_arm(angle, u, sx, sy, sz, z0):
+            """A box at distance u along the arm at ``angle`` (deg), aligned with it."""
+            a = np.radians(angle)
+            return box(sx, sy, sz, u * np.cos(a), u * np.sin(a), z0, angle)
 
+        # m1 front-right, m2 rear-right, m3 rear-left, m4 front-left (the
+        # mixer's order); arm angles measured from +x.
+        motors = [(xy, -xy), (-xy, -xy), (-xy, xy), (xy, xy)]
+        arm_angles = (-45.0, -135.0, 135.0, 45.0)
+
+        # Black PCB: board, four tapered arms and the round motor pads (index 0:
+        # the rigid part tests and tools read).
+        arm = [(0.012, -0.0045), (0.046, -0.0032), (0.046, 0.0032), (0.012, 0.0045)]
+        pcb_parts = [_prism_mesh(_rounded_rect(0.039, 0.031, 0.004), 0.0, pcb)]
+        pcb_parts += [_place(_prism_mesh(arm, 0.0, pcb), angle) for angle in arm_angles]
+        pcb_parts += [_prism_mesh(_circle(0.0068, mx, my, 24), 0.0, pcb) for mx, my in motors]
+        add(_merge_meshes(pcb_parts), self.COLOR_PCB)
+
+        # Expansion headers along both long edges, the antenna stub at the front.
+        add(_merge_meshes([box(0.0254, 0.0025, 0.0085, 0.0, y, pcb) for y in (0.0128, -0.0128)]
+                          + [box(0.0045, 0.0012, 0.0012, 0.0215, 0.0, 0.0002)]),
+            (0.07, 0.07, 0.08, 1.0))
+        # Gold pins along the top of each header.
+        add(_merge_meshes([box(0.0240, 0.0011, 0.0003, 0.0, y, pcb + 0.0085) for y in (0.0128, -0.0128)]),
+            (0.86, 0.70, 0.32, 1.0))
+        # Battery between the headers, its label, leads and the white JST plug at the rear.
+        add(box(0.029, 0.0195, 0.0065, -0.001, 0.0, pcb + 0.0014), (0.70, 0.72, 0.75, 1.0))
+        add(box(0.016, 0.0197, 0.0004, -0.001, 0.0, pcb + 0.0079), (0.10, 0.11, 0.13, 1.0))
+        add(box(0.006, 0.0012, 0.0012, -0.0180, 0.0030, pcb + 0.0030), (0.85, 0.12, 0.12, 1.0))
+        add(box(0.006, 0.0012, 0.0012, -0.0180, 0.0050, pcb + 0.0030), (0.12, 0.12, 0.13, 1.0))
+        add(_merge_meshes([box(0.0035, 0.006, 0.003, -0.0215, 0.0040, pcb)]
+                          + [on_arm(a, 0.028, 0.0048, 0.0034, 0.0022, pcb) for a in arm_angles]),
+            (0.93, 0.93, 0.90, 1.0))
+        # Status LEDs: red and green at the front, blue at the rear.
+        for angle, color in zip(arm_angles, ("#ff3b3b", "#4c9aff", "#4c9aff", "#3dff7a")):
+            add(on_arm(angle, 0.019, 0.0028, 0.0022, 0.0012, pcb), _gl_color(color))
+
+        # 08028 motors: mount and black bell, plus the leg loop underneath.
+        add(_merge_meshes([_prism_mesh(_circle(0.0058, mx, my), pcb, pcb + 0.0018) for mx, my in motors]),
+            (0.24, 0.25, 0.27, 1.0))
+        add(_merge_meshes([_prism_mesh(_circle(0.0054, mx, my), pcb + 0.0018, 0.0104) for mx, my in motors]),
+            (0.11, 0.11, 0.12, 1.0))
+        legs = []
+        for angle in arm_angles:
+            for u in (0.0465, 0.0535):
+                legs.append(on_arm(angle, u, 0.0015, 0.0015, 0.011, -0.011))
+            legs.append(on_arm(angle, 0.050, 0.0085, 0.0015, 0.0015, -0.0125))
+        add(_merge_meshes(legs), (0.09, 0.09, 0.10, 1.0))
+
+        # 55 mm propellers (spinning) and a faint disc for the blur of the blades.
+        for (mx, my), spin in zip(motors, self._PROP_DIRS):
+            add(_place(_propeller_mesh(0.0275, self._PROP_Z, 14.0, spin), offset=(mx, my, 0.0)),
+                self.COLOR_PROP, spin_center=(mx, my, self._PROP_Z), spin_dir=spin)
+        add(_merge_meshes([_disc_mesh(0.0275, center=(mx, my, self._PROP_Z)) for mx, my in motors]),
+            self.COLOR_PROP[:3] + (0.05,), gl_options="translucent")
         return components
 
     def _init_scene(self):
@@ -1500,8 +1544,7 @@ class _PyQtGraphQuadWindow:
 
         # Key to the scene's marks and how to move the camera, as overlay
         # labels like the axis letters.
-        entries = [("#5cc8ff", "flown path"), ("#ffc04d", "nose (body +X)"), (THEME["text"], "thrust axis"),
-                   ("#ff8a3d", "front rotors")]
+        entries = [("#5cc8ff", "flown path"), ("#ffc04d", "nose (body +X)"), (THEME["text"], "thrust axis")]
         if self.show_wind:
             entries.append((self.COLOR_WIND_ARROW, "wind velocity, 0.5 m per m/s" if self.wind_as_velocity else "wind force, 0.5 m per N"))
         if show_waypoints:
