@@ -19,8 +19,9 @@ Keys (all optional; ``extends`` merges this file over another one)::
     monte_carlo: {...}                   # experiments.monte_carlo
     # every other key is a sim.scenario.Scenario field:
     sim_mode, duration_s, initial_pos, initial_attitude, hover_setpoint,
-    hover_yaw, trajectory_speed, waypoint_source, user_waypoints,
-    waypoints_csv_path, helix_start_t, helix_num_waypoints,
+    hover_yaw, takeoff_duration_s, trajectory_speed, waypoint_source,
+    user_waypoints, timed_waypoints, waypoints_csv_path, helix_start_t,
+    helix_num_waypoints,
     wind: {...}           # model.wind.WindModel.from_dict
     rotor_fault: {case, rotor, start_time_s, enabled, mechanism}
     estimator: {...}      # estimation.estimator.build_estimator
@@ -202,6 +203,20 @@ def _waypoints(key, value):
     return tuple(rows)
 
 
+def _timed_waypoints(key, value):
+    # Empty is the unused default (Scenario checks the rows when it flies them).
+    if not isinstance(value, (list, tuple)):
+        _err(key, "expected a list of [t, x, y, z, yaw] rows")
+    rows = []
+    for row in value:
+        if not isinstance(row, (list, tuple)) or len(row) != 5 or not all(
+            _is_number(v) for v in row
+        ):
+            _err(key, "each waypoint must be 5 numbers [t, x, y, z, yaw]")
+        rows.append(tuple(float(v) for v in row))
+    return tuple(rows)
+
+
 # ---------------------------------------------------------------------------
 # Loading
 # ---------------------------------------------------------------------------
@@ -312,6 +327,13 @@ def _scenario_value(key, value):
         return _seq3(key, value)
     if key in ("hover_yaw", "trajectory_speed", "helix_start_t"):
         return _number(key, value)
+    if key == "takeoff_duration_s":
+        value = _number(key, value)
+        if value < 0.0:
+            _err(key, "must be >= 0")
+        return value
+    if key == "timed_waypoints":
+        return _timed_waypoints(key, value)
     if key == "helix_num_waypoints":
         value = _int(key, value)
         if value < 2:

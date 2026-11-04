@@ -1,3 +1,6 @@
-# No-argument runs start hovering at 1 m, without disturbances.
+# No-argument runs take off from the origin and hover at 1 m, without
+# disturbances.
 extends: hovering.yaml
 name: default
+initial_pos: [0.0, 0.0, 0.0]
+takeoff_duration_s: 2.0  # minimum-jerk climb to hover_setpoint, then hover

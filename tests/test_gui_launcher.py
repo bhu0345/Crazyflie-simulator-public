@@ -292,7 +292,10 @@ class TestGuiLauncher(unittest.TestCase):
         cfg.scenario.duration_s = 0.12
         self.window._apply_config(cfg)
         viewer = self.window.viewer
-        self.assertIn("Hover in place. No disturbances", self.window.summary.text())
+        self.assertIn("Take off and hover. Climb to (0, 0, 1) m in 2 s, no disturbances",
+                      self.window.summary.text())
+        self.assertFalse(viewer.show_tracking)
+        self.assertIsNotNone(viewer.reference_marker)  # the takeoff climb is drawn
         self.assertFalse(viewer.show_wind)
         self.assertFalse(viewer.show_rotor)
         self.assertIsNone(viewer.force_plot)
@@ -314,6 +317,23 @@ class TestGuiLauncher(unittest.TestCase):
         self.assertGreater(viewer.err_plot.viewRange()[1][1], 10)
         viewer.fit_button.click()
         self.assertLess(viewer.err_plot.viewRange()[1][1], 1)
+
+    def test_chart_reset_view_returns_to_live_auto_y(self):
+        viewer = self.window.viewer
+        for t, value in ((1., 10.), (2., 0.1), (15., 0.2)):
+            viewer._update_telemetry(t, np.zeros(3), 0., value, None, None, None)
+        self.assertGreater(viewer.err_plot.viewRange()[1][1], 10)  # Auto Y kept the 10 m peak
+        viewer.err_plot.setRange(xRange=(0., 3.), yRange=(-1., 50.), padding=0)
+        viewer._manual_range((True, True), viewer.err_plot)
+        viewer.cursor_time.setValue(1.)
+        self.assertEqual(viewer.plot_mode.currentText(), "Inspect")
+        self.assertFalse(viewer.auto_y.isChecked())
+        viewer.reset_charts_button.click()
+        self.assertEqual(viewer.plot_mode.currentText(), "Live 10 s")
+        self.assertTrue(viewer.auto_y.isChecked())
+        self.assertEqual(viewer.err_plot.viewRange()[0], [5., 15.])
+        self.assertLess(viewer.err_plot.viewRange()[1][1], 1)  # fitted to the last 10 s only
+        self.assertEqual(viewer.cursor_time.value(), 15.)
 
     def test_slow_playback_changes_only_timer_and_survives_reset(self):
         viewer = self.window.viewer
@@ -389,6 +409,101 @@ class TestGuiLauncher(unittest.TestCase):
         self.assertFalse(viewer.tether_line.visible())
         self.assertEqual(self.window.sim.t, 0.)
 
+    def test_view_menu_toggles_each_scene_mark_and_keeps_the_choices(self):
+        self.assertIn("wind_arrow", self.window.viewer.scene_toggles)
+        self.assertNotIn("waypoints", self.window.viewer.scene_toggles)
+        self.window._apply_config(load_config(REPO / "crazyflie_sim/configs/trajectory_timed.yaml"))
+        viewer = self.window.viewer
+        self.assertEqual(list(viewer.scene_toggles), [
+            "nose_arrow", "thrust_axis", "flown_path", "reference_path", "reference_point",
+            "waypoints", "world_axes", "height_projection"])
+        marks = {"thrust_axis": ([viewer.thrust_axis_line], "thrust axis"),
+                 "flown_path": ([viewer.trail_line], "flown path"),
+                 "reference_path": ([viewer.reference_line], "reference path"),
+                 "reference_point": ([viewer.reference_marker], "reference now"),
+                 "waypoints": (viewer.waypoint_items, "waypoints")}
+        for key, (items, legend) in marks.items():
+            with self.subTest(mark=key):
+                self.assertTrue(all(item.visible() for item in items))
+                self.assertIn(legend, viewer.scene_legend.text())
+                viewer.scene_toggles[key].setChecked(False)
+                self.assertFalse(any(item.visible() for item in items))
+                self.assertNotIn(legend, viewer.scene_legend.text())
+        self.assertFalse(viewer.scene_legend.isHidden())  # the nose arrow is still listed
+        viewer.scene_toggles["nose_arrow"].setChecked(False)
+        self.assertTrue(viewer.scene_legend.isHidden())
+
+        # Reset keeps every choice; another scenario keeps those it shares.
+        self.window.reset_run()
+        viewer = self.window.viewer
+        self.assertFalse(any(viewer.scene_toggles[key].isChecked() for key in marks))
+        self.assertFalse(viewer.reference_line.visible())
+        self.window._apply_config(load_config(REPO / "crazyflie_sim/configs/hover_wind_dryden.yaml"))
+        viewer = self.window.viewer
+        self.assertFalse(viewer.scene_toggles["flown_path"].isChecked())
+        self.assertFalse(viewer.trail_line.visible())
+        self.assertTrue(viewer.scene_toggles["wind_arrow"].isChecked())
+        self.assertTrue(viewer.wind_arrow.visible())
+        self.errors.assert_not_called()
+
+    def test_view_menu_stays_open_while_toggling_several_marks(self):
+        from pyqtgraph.Qt import QtTest
+
+        Qt = self.gui.QtCore.Qt
+        viewer = self.window.viewer
+        menu = viewer.scene_options.menu()
+        menu.popup(self.gui.QtCore.QPoint(0, 0))
+        self.app.processEvents()
+        self.assertTrue(menu.isVisible())
+        for key in ("flown_path", "thrust_axis", "world_axes"):
+            action = viewer.scene_toggles[key]
+            before = action.isChecked()
+            QtTest.QTest.mouseClick(menu, Qt.MouseButton.LeftButton, pos=menu.actionGeometry(action).center())
+            self.assertEqual(action.isChecked(), not before)
+            self.assertTrue(menu.isVisible())
+        self.assertFalse(viewer.trail_line.visible())
+        self.assertTrue(all(axis.visible() for axis in viewer.world_axes))
+        menu.setActiveAction(viewer.scene_toggles["flown_path"])
+        QtTest.QTest.keyClick(menu, Qt.Key.Key_Space)
+        self.assertTrue(viewer.scene_toggles["flown_path"].isChecked())
+        self.assertTrue(menu.isVisible())
+        QtTest.QTest.keyClick(menu, Qt.Key.Key_Escape)
+        self.assertFalse(menu.isVisible())
+
+    def test_nose_arrow_toggle_survives_reset_and_reset_view_restores_the_camera(self):
+        viewer = self.window.viewer
+        self.assertTrue(viewer.show_nose_arrow.isChecked())
+        self.assertTrue(viewer.nose_arrow.visible())
+        self.assertIn("nose (body +X)", viewer.scene_legend.text())
+        viewer.show_nose_arrow.setChecked(False)
+        self.assertFalse(viewer.nose_arrow.visible())
+        self.assertNotIn("nose (body +X)", viewer.scene_legend.text())
+        self.window.reset_run()
+        viewer = self.window.viewer
+        self.assertFalse(viewer.show_nose_arrow.isChecked())
+        self.assertFalse(viewer.nose_arrow.visible())
+        viewer.show_nose_arrow.setChecked(True)
+        self.assertTrue(viewer.nose_arrow.visible())
+
+        def camera():
+            opts = viewer.view.opts
+            center = opts["center"]
+            return (opts["distance"], opts["elevation"], opts["azimuth"], center.x(), center.y(), center.z())
+
+        default = camera()
+        viewer.view.setCameraPosition(distance=20., elevation=90., azimuth=10.)
+        viewer.view.opts["center"] = viewer.pg.Vector(3., 4., 5.)
+        self.assertNotEqual(camera(), default)
+        viewer.reset_view_button.click()
+        self.assertEqual(camera(), default)
+
+        viewer.view.resize(800, 600)
+        viewer._update_axis_labels()
+        button, hint = viewer.reset_view_button.geometry(), viewer.scene_hint.geometry()
+        self.assertLess(button.right(), hint.left())
+        self.assertEqual(hint.right(), 800 - 14 - 1)
+        self.assertLessEqual(abs(button.center().y() - hint.center().y()), 1)
+
     def test_world_indicator_tracks_camera_rotation_only_and_stays_in_corner(self):
         viewer = self.window.viewer
         viewer.view.setCameraPosition(elevation=90, azimuth=-90)
@@ -414,6 +529,85 @@ class TestGuiLauncher(unittest.TestCase):
         viewer.show_height_projection.setChecked(True)
         viewer.show_world_axes.setChecked(True)
         self.assertEqual(self.window.sim.t, paused_t)
+
+    def test_trajectory_editor_validates_and_flies_a_custom_timed_run(self):
+        from crazyflie_sim.visualization.trajectory_editor import TEMPLATE_ROWS, TrajectoryEditor
+
+        dialog = TrajectoryEditor(self.window, self.window.selected_config())
+        self.addCleanup(dialog.deleteLater)
+        self.assertEqual(dialog.rows(), list(TEMPLATE_ROWS))  # not a trajectory: the template
+        self.assertTrue(dialog.apply_button.isEnabled())
+        dialog.table.item(2, 0).setText("5")
+        self.assertFalse(dialog.apply_button.isEnabled())
+        self.assertIn("Row 3", dialog.status.text())
+        dialog.table.item(2, 0).setText("x")
+        self.assertIn("Row 3: t [s] is not a number", dialog.status.text())
+        dialog.set_rows([(2.0, 0.0, 0.0, 1.0, 0.0), (5.0, 0.5, 0.0, 1.0, 30.0)])
+        dialog.add_row()
+        self.assertEqual(dialog.rows()[-1], (7.0, 0.5, 0.0, 1.0, 30.0))
+        self.assertTrue(dialog.apply_button.isEnabled())
+
+        cfg = dialog.run_config()
+        self.assertEqual((cfg.scenario.sim_mode, cfg.scenario.waypoint_source), ("trajectory", "timed"))
+        self.assertAlmostEqual(cfg.scenario.timed_waypoints[1][4], np.radians(30.0))
+        self.assertIsNone(cfg.source)
+        self.window._apply_config(cfg)
+        self.assertEqual(self.window.scenario_combo.currentText(), "custom (unsaved)")
+        self.assertIn("3 timed waypoints", self.window.summary.text())
+        self.assertAlmostEqual(self.window.sim.duration_s, 9.0)
+        viewer = self.window.viewer
+        self.assertTrue(viewer.show_tracking)
+        self.window.start_run()
+        for _ in range(3):
+            self.window._tick()
+        self.window.pause_run()
+        plots = {spec["key"]: spec for spec in viewer._plots}
+        reference = self.window.sim.reference(self.window.sim.t)
+        np.testing.assert_allclose(plots["tracking_pos"]["values"][-1, 3:], reference.pos)
+        np.testing.assert_allclose(plots["tracking_pos"]["values"][-1, :3], self.window.sim.quad.position())
+        self.assertEqual(plots["tracking_yaw"]["values"].shape[1], 2)
+
+        # Switching away and back keeps the unsaved trajectory; saving keeps it too.
+        hovering = str((REPO / "crazyflie_sim/configs/hovering.yaml").resolve())
+        self.window.reset_run()
+        self.window.scenario_combo.setCurrentIndex(self.window.scenario_combo.findData(hovering))
+        self.window.scenario_combo.activated.emit(self.window.scenario_combo.currentIndex())
+        self.assertEqual(self.window.config.name, "hovering")
+        self.window.scenario_combo.setCurrentIndex(self.window.scenario_combo.findData(self.gui.CUSTOM_SCENARIO))
+        self.window.scenario_combo.activated.emit(self.window.scenario_combo.currentIndex())
+        self.assertEqual(self.window.config.scenario.timed_waypoints, cfg.scenario.timed_waypoints)
+        with tempfile.TemporaryDirectory() as tmp:
+            saved = load_config(self.window.save_to(Path(tmp) / "timed"))
+        self.assertEqual(saved.scenario.timed_waypoints, cfg.scenario.timed_waypoints)
+        self.errors.assert_not_called()
+
+    def test_propellers_show_partial_and_complete_rotor_faults(self):
+        from crazyflie_sim.visualization.quad_plot_pg import _gl_color
+
+        for case, state, color in (("power_loss_50pct", "partial", "warn"), ("failure", "failed", "danger")):
+            with self.subTest(case=case):
+                cfg = load_config(REPO / "crazyflie_sim/configs/hover_rotor_fault_default.yaml")
+                cfg.scenario.rotor_fault.case = case
+                cfg.scenario.rotor_fault.start_time_s = 0.04
+                cfg.scenario.duration_s = 0.2
+                self.window._apply_config(cfg)
+                viewer = self.window.viewer
+                self.assertEqual(viewer.prop_states, ("nominal",) * 4)
+                self.window.start_run()
+                for _ in range(4):
+                    self.window._tick()
+                before = viewer.prop_angles.copy()
+                self.window._tick()
+                turned = viewer.prop_angles - before
+                self.assertEqual(viewer.prop_states, (state, "nominal", "nominal", "nominal"))
+                props = [c for c in viewer.body_components if c["rotor"] == 0 and not c["blur"]]
+                disc = [c for c in viewer.body_components if c["rotor"] == 0 and c["blur"]]
+                np.testing.assert_allclose(props[0]["item"].opts["color"], _gl_color(self.gui.THEME[color]))
+                self.assertLess(turned[0], np.min(turned[1:]))
+                if state == "failed":
+                    self.assertEqual(turned[0], 0.0)
+                    self.assertFalse(disc[0]["item"].visible())
+                self.window.pause_run()
 
 
 if __name__ == "__main__":

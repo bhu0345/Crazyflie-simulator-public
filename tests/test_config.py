@@ -11,20 +11,26 @@ CONFIGS = sorted((Path(__file__).resolve().parents[1] / "crazyflie_sim" / "confi
 
 
 class TestEveryConfig(unittest.TestCase):
-    def test_default_is_a_full_run_without_disturbances(self):
+    def test_default_takes_off_from_the_origin_and_hovers_without_disturbances(self):
         from crazyflie_sim.runsim import load_run_config, parse_args
 
         cfg = load_run_config(parse_args([]))
         self.assertEqual(cfg.scenario.sim_mode, "hovering")
         self.assertEqual(cfg.scenario.event(), (None, ""))
-        np.testing.assert_array_equal(cfg.scenario.initial_pos, [0., 0., 1.])
+        np.testing.assert_array_equal(cfg.scenario.initial_pos, [0., 0., 0.])
         np.testing.assert_array_equal(cfg.scenario.hover_setpoint, [0., 0., 1.])
+        self.assertEqual(cfg.scenario.takeoff_duration_s, 2.0)
         with params_overridden(cfg.params_overrides):
             sim = Simulation.from_scenario(cfg.scenario, cfg.controller_mode, cfg.gains())
             run = sim.run()
         self.assertAlmostEqual(run["t"][-1], 20.)
         np.testing.assert_array_equal(run["wind"], np.zeros_like(run["wind"]))
-        np.testing.assert_array_equal(run["desired_pos"], np.tile([0., 0., 1.], (len(run["t"]), 1)))
+        # The reference climbs monotonically for 2 s, then holds the setpoint.
+        climb = run["t"] <= 2.0
+        self.assertTrue(np.all(np.diff(run["desired_pos"][climb, 2]) >= 0.0))
+        np.testing.assert_array_equal(run["desired_pos"][~climb], np.tile([0., 0., 1.], (np.sum(~climb), 1)))
+        self.assertLess(np.max(run["pos"][:, 2]), 1.02)
+        self.assertLess(run["err"][-1], 0.01)
         self.assertFalse(sim.quad.rotor_fault.enabled)
         self.assertTrue(np.all(np.isfinite(run["pos"])))
 
@@ -68,6 +74,9 @@ class TestLoader(unittest.TestCase):
             ({"wind": {"FX_MODE": "sin"}}, "UPPERCASE"),
             ({"params_overrides": {"g": 9.0}}, "params_overrides"),
             ({"initial_pos": [0, 0]}, "initial_pos"),
+            ({"takeoff_duration_s": -1.0}, "takeoff_duration_s"),
+            ({"timed_waypoints": [[1.0, 0.0, 0.0, 1.0]]}, "timed_waypoints"),
+            ({"waypoint_source": "spline"}, "waypoint_source"),
         )
         for raw, needle in cases:
             with self.subTest(raw=raw):

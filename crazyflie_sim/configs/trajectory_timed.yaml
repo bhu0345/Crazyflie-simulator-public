@@ -1,0 +1,27 @@
+# Timed waypoints: the reference reaches each waypoint at its time, then holds
+# the last one for 2 s.  Between two waypoints every axis (and yaw) moves
+# monotonically, without overshoot: it stops where it reverses or holds and
+# flows through otherwise.  Edit the table in the GUI with "Trajectory…"
+# (python runsim.py --gui).
+#
+#   python runsim.py trajectory_timed.yaml
+
+name: trajectory_timed
+
+sim_mode: trajectory
+# The PID and Mellinger track this within 5 mm.  The LQR (full_state_feedback)
+# is linearized about hover at yaw 0: it tracks to about +/-45 deg of yaw and
+# loses the vehicle beyond about 70 deg, so it does not fly this course.
+controller_mode: mellinger
+
+waypoint_source: timed
+# Rows are [t, x, y, z, yaw]; t in seconds, yaw in radians.  The start pose
+# (initial_pos at t = 0) is prepended when the first row is after t = 0.
+timed_waypoints:
+  - [3.0, 0.0, 0.0, 1.0, 0.0]      # take off
+  - [6.0, 0.8, 0.0, 1.0, 0.0]
+  - [9.0, 0.8, 0.8, 1.0, 1.5708]
+  - [12.0, 0.0, 0.8, 1.0, 3.1416]
+  - [15.0, 0.0, 0.0, 1.0, 1.5708]
+  - [17.0, 0.0, 0.0, 1.0, 0.0]     # turn in place
+  - [20.0, 0.0, 0.0, 0.3, 0.0]     # descend
