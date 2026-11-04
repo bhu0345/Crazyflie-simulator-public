@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 
 from crazyflie_sim.controllers import registry
+import crazyflie_sim.model.params as params
 from crazyflie_sim.sim import archive
 from crazyflie_sim.sim.config import apply_params_overrides, load_config
 from crazyflie_sim.sim.scenario import SIM_MODES, fault_case_text
@@ -121,7 +122,8 @@ def make_frame_source(sim, scenario, mode):
             if not sim.done:
                 sim.step()
         quad, t = sim.quad, sim.t
-        error = float(np.linalg.norm(quad.position() - sim.reference(t).pos))
+        reference = sim.reference(t)
+        error = float(np.linalg.norm(quad.position() - reference.pos))
         waiting = wait_until is not None and t < wait_until
         if not waiting and np.isfinite(error):
             max_error[0] = error if not np.isfinite(max_error[0]) else max(max_error[0], error)
@@ -137,6 +139,8 @@ def make_frame_source(sim, scenario, mode):
             "position_error_norm": error,
             "position_error_norm_for_max": error,
             "position_error_max": float(max_error[0]),
+            "reference_pos": np.asarray(reference.pos, dtype=float).reshape(3,).copy(),
+            "reference_yaw_deg": float(np.degrees(reference.yaw)),
             "yaw_rate_dps": world_vertical_spin_dps(quad),
             "waiting_for_wind": waiting,
             "position_error_waiting_label": wait_label if waiting else "",
@@ -178,7 +182,18 @@ def view_config(sim, scenario):
         "event_label": event_label,
         # Fault mode plots estimate + truth when the controller has an estimate.
         "rotor_plot": "effectiveness" if diagnostics.get("effectiveness_estimate") is not None else "thrust",
+        "tracking": scenario.sim_mode == "trajectory",
+        "reference_path": reference_path(sim),
+        # Plant hover thrust per rotor: the propellers' display speed is
+        # relative to it.
+        "hover_thrust_n": float(sim.quad.mass * params.g / 4.0),
     }
+
+
+def reference_path(sim, rate_hz=ANIMATION_HZ):
+    """(N, 3) reference positions sampled over the whole run."""
+    times = np.linspace(0.0, sim.duration_s, int(np.ceil(sim.duration_s * rate_hz)) + 1)
+    return np.array([np.asarray(sim.reference(t).pos, dtype=float).reshape(3,) for t in times])
 
 
 def main(argv=None):

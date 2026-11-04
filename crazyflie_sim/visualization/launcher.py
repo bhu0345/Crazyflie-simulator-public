@@ -16,12 +16,14 @@ from crazyflie_sim.sim.simulation import Simulation
 from crazyflie_sim.sim import archive
 from crazyflie_sim.visualization.run_result import RunResult
 from crazyflie_sim.visualization.quad_plot_pg import THEME, _load_qt_modules, _PyQtGraphQuadWindow, scroll_qss
+from crazyflie_sim.visualization.trajectory_editor import TrajectoryEditor
 
 
 pg, gl, QtCore, QtWidgets = _load_qt_modules()
 from pyqtgraph.Qt import QtGui  # noqa: E402  (after _load_qt_modules picks the binding)
 
 CONFIGS_DIR = Path(__file__).resolve().parents[1] / "configs"
+CUSTOM_SCENARIO = "__custom__"  # scenario-list entry of a config without a file
 
 _LAUNCHER_QSS = """
     QWidget#launcherRoot {{ background-color: {bg}; }}
@@ -249,6 +251,12 @@ def _scenario_summary(scenario, duration):
                   "csv": "Waypoints from a CSV file",
                   "helix": "A helix"}.get(scenario.waypoint_source, "Waypoints")
         detail = f"{source} at {scenario.trajectory_speed:g} m/s"
+        if scenario.waypoint_source == "timed":
+            detail = f"{len(scenario.timed_waypoints)} timed waypoints"
+    elif scenario.sim_mode == "hovering" and scenario.takeoff_duration_s > 0.0:
+        goal = "Take off and hover"
+        detail = "Climb to ({:g}, {:g}, {:g}) m in {:g} s, no disturbances".format(
+            *scenario.hover_setpoint, scenario.takeoff_duration_s)
     elif scenario.sim_mode == "hovering":
         goal, detail = "Hover in place", "No disturbances"
     elif scenario.sim_mode == "hover_wind":
@@ -273,9 +281,10 @@ class SimulationLauncher(QtWidgets.QWidget):
         self.sim = None
         self.last_result = None
         self.playback_rate = 1.0
-        self.scene_display = (False, False)
+        self.scene_display = {}  # View menu choices by mark, kept across Reset and scenarios
         self.result_dialog = None
         self.config = config
+        self.custom_config = None  # the latest config without a file (trajectory editor)
         self.setWindowTitle("Crazyflie Simulator")
         self.setObjectName("launcherRoot")
         self.setStyleSheet(_LAUNCHER_QSS.format(**THEME, **_chevron_files()) + scroll_qss())
@@ -304,6 +313,10 @@ class SimulationLauncher(QtWidgets.QWidget):
         self.save_button = menu.addAction("Save config…", self.save_config)
         self.file_button.setMenu(menu)
         commands.addWidget(self.file_button)
+        self.trajectory_button = QtWidgets.QPushButton("Trajectory…")
+        self.trajectory_button.setToolTip("Edit timed waypoints [t, x, y, z, ψ] and fly them")
+        self.trajectory_button.clicked.connect(self.edit_trajectory)
+        commands.addWidget(self.trajectory_button)
         commands.addStretch(1)
         self.last_result_button = QtWidgets.QPushButton("Last result…")
         self.last_result_button.clicked.connect(self.show_last_result)
@@ -400,11 +413,22 @@ class SimulationLauncher(QtWidgets.QWidget):
                 index = self.scenario_combo.count() - 1
             self.scenario_combo.setCurrentIndex(index)
             self.scenario_combo.setToolTip(path)
+        else:
+            self.custom_config = config
+            index = self.scenario_combo.findData(CUSTOM_SCENARIO)
+            if index < 0:
+                self.scenario_combo.addItem("custom (unsaved)", CUSTOM_SCENARIO)
+                index = self.scenario_combo.count() - 1
+            self.scenario_combo.setCurrentIndex(index)
+            self.scenario_combo.setToolTip("Not saved to a file; File > Save config… keeps it")
         self.controller_combo.setCurrentIndex(self.controller_combo.findData(config.controller_mode))
         self.profile_combo.setCurrentIndex(self.profile_combo.findData(config.scenario.actuator_profile))
         self.reset_run()
 
     def _select_scenario(self):
+        if self.scenario_combo.currentData() == CUSTOM_SCENARIO:
+            self._apply_config(self.custom_config)
+            return
         previous = self.config.source
         try:
             config = load_config(self.scenario_combo.currentData())
@@ -427,6 +451,11 @@ class SimulationLauncher(QtWidgets.QWidget):
                 return
             self._apply_config(config)
 
+    def edit_trajectory(self):
+        dialog = TrajectoryEditor(self, self.selected_config())
+        if dialog.exec():
+            self._apply_config(dialog.run_config())
+
     def selected_config(self):
         raw = self.config.to_dict()
         raw["controller_mode"] = self.controller_combo.currentData()
@@ -436,8 +465,8 @@ class SimulationLauncher(QtWidgets.QWidget):
     def _discard_view(self):
         if self.viewer is not None:
             self.playback_rate = self.viewer.playback_speed.currentData()
-            self.scene_display = (self.viewer.show_world_axes.isChecked(),
-                                  self.viewer.show_height_projection.isChecked())
+            self.scene_display.update(
+                (key, action.isChecked()) for key, action in self.viewer.scene_toggles.items())
             self.viewer.timer.stop()
             self.viewer._axis_label_timer.stop()
             self.viewer.close_expanded()
@@ -466,8 +495,8 @@ class SimulationLauncher(QtWidgets.QWidget):
             self.viewer.brand.setVisible(False)
             self.viewer.playback_speed.setCurrentIndex(
                 self.viewer.playback_speed.findData(self.playback_rate))
-            self.viewer.show_world_axes.setChecked(self.scene_display[0])
-            self.viewer.show_height_projection.setChecked(self.scene_display[1])
+            for key, action in self.viewer.scene_toggles.items():
+                action.setChecked(self.scene_display.get(key, action.isChecked()))
             self.viewer.export_result.clicked.connect(self.export_results)
             details = (f"Config: {cfg.source or 'in-memory configuration'}\n"
                        f"Controller: {registry.get(cfg.controller_mode).label}\n"
@@ -498,7 +527,8 @@ class SimulationLauncher(QtWidgets.QWidget):
     def _set_state(self, state, message):
         self.state = state
         editable = state in ("Ready", "Done", "Error")
-        for widget in (self.scenario_combo, self.controller_combo, self.profile_combo, self.open_button):
+        for widget in (self.scenario_combo, self.controller_combo, self.profile_combo, self.open_button,
+                       self.trajectory_button):
             widget.setEnabled(editable)
         self.start_button.setVisible(state != "Running")
         self.start_button.setEnabled(state in ("Ready", "Paused", "Done"))

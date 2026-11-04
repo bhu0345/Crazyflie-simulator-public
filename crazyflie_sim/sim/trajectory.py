@@ -39,6 +39,57 @@ def get_helix_waypoints(t, n, yaw=0.0):
 
     return np.stack((x, y, z, yaw_col), axis=-1)
 
+def _quintic_hermite(s, T, p0, p1, v0, v1):
+    """(pos, vel, acc) at s in [0, 1] of the quintic from (p0, v0) to (p1, v1)
+    over T seconds with zero acceleration at both ends."""
+    h = (10*s**3 - 15*s**4 + 6*s**5, s - 6*s**3 + 8*s**4 - 3*s**5, -4*s**3 + 7*s**4 - 3*s**5)
+    dh = (30*s**2 - 60*s**3 + 30*s**4, 1 - 18*s**2 + 32*s**3 - 15*s**4, -12*s**2 + 28*s**3 - 15*s**4)
+    ddh = (60*s - 180*s**2 + 120*s**3, -36*s + 96*s**2 - 60*s**3, -24*s + 84*s**2 - 60*s**3)
+    delta = p1 - p0
+    pos = p0 + delta * h[0] + T * (v0 * h[1] + v1 * h[2])
+    vel = delta * dh[0] / T + v0 * dh[1] + v1 * dh[2]
+    acc = delta * ddh[0] / T**2 + (v0 * ddh[1] + v1 * ddh[2]) / T
+    return pos, vel, acc
+
+def minimum_jerk(t, duration, start, end):
+    """(pos, vel, acc) of the rest-to-rest minimum-jerk move start -> end."""
+    start = np.asarray(start, dtype=float)
+    zero = np.zeros_like(start)
+    s = float(np.clip(t / duration, 0.0, 1.0))
+    return _quintic_hermite(s, duration, start, np.asarray(end, dtype=float), zero, zero)
+
+def timed_waypoint_velocities(times, waypoints):
+    """Nx4 velocities at the waypoints of a timed trajectory (rows [x, y, z,
+    yaw] with yaw unwrapped).  Each axis moves monotonically between two
+    waypoints: it stops where it reverses or holds, and otherwise passes at
+    the shape-preserving (PCHIP) slope, capped at twice the smaller adjacent
+    one so the quintic segments cannot overshoot."""
+    h = np.diff(times)[:, None]
+    d = np.diff(waypoints, axis=0) / h
+    v = np.zeros_like(waypoints)
+    w1 = 2.0 * h[1:] + h[:-1]
+    w2 = h[1:] + 2.0 * h[:-1]
+    same = d[:-1] * d[1:] > 0.0
+    with np.errstate(divide="ignore", invalid="ignore"):
+        mean = (w1 + w2) / (w1 / d[:-1] + w2 / d[1:])
+    cap = 2.0 * np.minimum(np.abs(d[:-1]), np.abs(d[1:]))
+    v[1:-1] = np.where(same, np.sign(d[1:]) * np.minimum(np.abs(mean), cap), 0.0)
+    return v
+
+def generate_timed_trajectory(t, times, waypoints, velocities):
+    """Desired state at t of the path that reaches waypoint i (row [x, y, z,
+    yaw], yaw unwrapped) at times[i], at rest at both ends; velocities from
+    timed_waypoint_velocities.  Before times[0] and after times[-1] it holds."""
+    t = float(t)
+    if t <= times[0] or t >= times[-1]:
+        row = waypoints[0] if t <= times[0] else waypoints[-1]
+        return DesiredState(row[:3].copy(), np.zeros(3), np.zeros(3), _wrap_pi(row[3]), 0.0)
+    k = int(np.clip(np.searchsorted(times, t, side="right") - 1, 0, len(times) - 2))
+    T = times[k + 1] - times[k]
+    pos, vel, acc = _quintic_hermite((t - times[k]) / T, T, waypoints[k], waypoints[k + 1],
+                                     velocities[k], velocities[k + 1])
+    return DesiredState(pos[:3], vel[:3], acc[:3], _wrap_pi(pos[3]), vel[3])
+
 def get_MST_coefficients(waypoints):
     # Segment durations are proportional to length; a common speed cancels
     # from the continuity constraints in normalized segment coordinates.

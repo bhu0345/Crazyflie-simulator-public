@@ -108,6 +108,30 @@ def _make_world_indicator(view, QtCore, QtWidgets):
     return indicator
 
 
+def _make_checklist_menu(parent, QtCore, QtWidgets):
+    """A QMenu whose checkable entries toggle without closing it, so several
+    can be changed in one visit; Esc or a click outside closes it."""
+
+    class ChecklistMenu(QtWidgets.QMenu):
+        def _toggle(self, action):
+            if action is None or not action.isEnabled() or not action.isCheckable():
+                return False
+            action.trigger()
+            return True
+
+        def mouseReleaseEvent(self, event):
+            pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            if not self._toggle(self.actionAt(pos)):
+                super().mouseReleaseEvent(event)
+
+        def keyPressEvent(self, event):
+            keys = (QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter, QtCore.Qt.Key.Key_Space)
+            if not (event.key() in keys and self._toggle(self.activeAction())):
+                super().keyPressEvent(event)
+
+    return ChecklistMenu(parent)
+
+
 def _pill_qss(color):
     """A tinted status pill: text in ``color`` on a faint fill of it."""
     r, g, b = _rgb255(color)
@@ -210,6 +234,36 @@ def _as_rotor_vector(value):
     if value is None:
         return None
     return np.asarray(value, dtype=float).reshape(4,)
+
+
+# Propellers turn at 5 rev/s in hover instead of the real ~300 rev/s, which a
+# 50 fps view would alias; a two-blade prop seems to reverse past 90 deg/frame.
+PROP_HOVER_DEG_S = 1800.0
+PROP_MAX_DEG_PER_FRAME = 80.0
+
+
+def rotor_display_state(motor_thrusts, hover_thrust_n, effectiveness):
+    """(spin rates in deg/s (4,), states) of the four drawn propellers.
+
+    The rate scales with the thrust-equivalent rotor speed sqrt(f / f_hover)
+    times the rotor's remaining effectiveness.  The factor is a display cue:
+    a controller that makes up for a partial loss restores the rotor's thrust
+    (and speed), yet the damaged rotor should still look slower.  A state is
+    "nominal", "partial" (0 < effectiveness < 1) or "failed" (0: stopped).
+    """
+    effectiveness = np.ones(4) if effectiveness is None else np.asarray(effectiveness, dtype=float)
+    states = tuple("failed" if e <= 1e-9 else "partial" if e < 1.0 - 1e-9 else "nominal"
+                   for e in effectiveness)
+    if motor_thrusts is None:
+        rates = np.full(4, PROP_HOVER_DEG_S)
+    else:
+        thrusts = np.maximum(np.asarray(motor_thrusts, dtype=float).reshape(4,), 0.0)
+        hover = float(hover_thrust_n) if hover_thrust_n is not None else np.nan
+        if not np.isfinite(hover) or hover <= 0.0:
+            hover = max(float(np.mean(thrusts)), 1e-9)
+        rates = PROP_HOVER_DEG_S * np.sqrt(thrusts / hover)
+    rates = np.where([state == "failed" for state in states], 0.0, rates * np.clip(effectiveness, 0.0, 1.0))
+    return rates, states
 
 
 def _parse_payload(payload):
@@ -660,7 +714,11 @@ class _PyQtGraphQuadWindow:
     _PROP_Z = 0.0118  # propeller plane above the bottom of the PCB
     COLOR_PCB = (0.16, 0.17, 0.19, 1.0)  # black solder mask, lifted off the dark scene
     COLOR_PROP = (0.72, 0.95, 0.22, 1.0)  # Bitcraze's lime-green propellers
+    # Propeller colour by rotor state (see rotor_display_state).
+    COLOR_PROP_STATE = {"nominal": COLOR_PROP, "partial": _gl_color(THEME["warn"]),
+                        "failed": _gl_color(THEME["danger"])}
     _PROP_DIRS = (1.0, -1.0, 1.0, -1.0)  # m1/m3 CCW, m2/m4 CW (viewed from above)
+    COLOR_REFERENCE = "#ffc04d"  # reference path and the waypoints on it
 
     def __init__(
         self,
@@ -703,6 +761,12 @@ class _PyQtGraphQuadWindow:
         event_time = self.view_config.get("event_time_s")
         self.event_time_s = None if event_time is None else float(event_time)
         self.event_label = str(self.view_config.get("event_label", "") or "")
+        # Trajectory runs plot reference against flown position and yaw.
+        self.show_tracking = bool(self.view_config.get("tracking", False))
+        reference_path = self.view_config.get("reference_path")
+        self.reference_path = (np.empty((0, 3)) if reference_path is None
+                               else np.asarray(reference_path, dtype=float).reshape(-1, 3))
+        self.hover_thrust_n = self.view_config.get("hover_thrust_n")
 
         self.duration_s = float(self.view_config.get("duration_s", self.frames / self.fps))
         self.event_description = self.view_config.get("event_description", self.event_label)
@@ -721,7 +785,10 @@ class _PyQtGraphQuadWindow:
         self.motor_thrust_history = []
         self.eff_est_history = []
         self.eff_truth_history = []
-        self.prop_angle = 0.0
+        self.tracking_pos_history = []  # rows [x, y, z, x_ref, y_ref, z_ref]
+        self.tracking_yaw_history = []  # rows [yaw, yaw_ref] in deg
+        self.prop_angles = np.zeros(4)
+        self.prop_states = None
         self._ui_phase = 0
 
         self.window = QtWidgets.QWidget()
@@ -850,6 +917,16 @@ class _PyQtGraphQuadWindow:
         card, self.err_plot, curves = self._plot_card("Position error", "m", (("error", THEME["accent"]),), "error")
         self.err_curve = curves[0]
         side.addWidget(card)
+        if self.show_tracking:
+            axes = (("x", "#ff8a3d"), ("y", "#3dd68c"), ("z", "#b18cff"))
+            card, _, _ = self._plot_card(
+                "Position", "m", axes + tuple((name + " ref", color, True) for name, color in axes),
+                "tracking_pos", caption="Solid: flown. Dashed: reference.")
+            side.addWidget(card)
+            card, _, _ = self._plot_card(
+                "Yaw", "deg", (("yaw", "#ff6b81"), ("yaw ref", "#ff6b81", True)), "tracking_yaw",
+                caption="Solid: flown. Dashed: reference, unwrapped next to the flown yaw.")
+            side.addWidget(card)
         self.force_plot = None
         self.force_x = self.force_y = self.force_z = None
         if self.show_wind:
@@ -897,9 +974,12 @@ class _PyQtGraphQuadWindow:
         self.auto_y.setChecked(True)
         self.fit_button = W.QPushButton("Fit")
         self.fit_button.setToolTip("Fit vertical ranges to the visible time interval")
+        self.reset_charts_button = W.QPushButton("Reset view")
+        self.reset_charts_button.setToolTip("Return the charts to Live 10 s with automatic vertical ranges")
         row.addWidget(self.plot_mode, 1)
         row.addWidget(self.auto_y)
         row.addWidget(self.fit_button)
+        row.addWidget(self.reset_charts_button)
         controls_layout.addLayout(row)
         cursor_row = W.QHBoxLayout()
         cursor_row.addWidget(self._label("Cursor (s)", "kvKey"))
@@ -937,6 +1017,7 @@ class _PyQtGraphQuadWindow:
         self.plot_mode.currentTextChanged.connect(self._plot_mode_changed)
         self.auto_y.toggled.connect(lambda: self._render_plots())
         self.fit_button.clicked.connect(lambda: self._render_plots(fit=True))
+        self.reset_charts_button.clicked.connect(self.reset_charts)
         self.cursor_time.valueChanged.connect(self._cursor_changed)
         self.cursor_previous.clicked.connect(lambda: self._move_cursor(-1))
         self.cursor_next.clicked.connect(lambda: self._move_cursor(1))
@@ -1082,6 +1163,20 @@ class _PyQtGraphQuadWindow:
         if mode == "Live 10 s":
             self._cursor_follow = True
         self._render_plots()
+
+    def reset_charts(self):
+        """The charts' starting view: Live 10 s, Auto Y with ranges fitted
+        afresh, and the cursor on the latest sample."""
+        for spec in self._plots:
+            spec["y_range"] = None
+        self._cursor_follow = True
+        self.plot_mode.blockSignals(True)
+        self.auto_y.blockSignals(True)
+        self.plot_mode.setCurrentText("Live 10 s")
+        self.auto_y.setChecked(True)
+        self.plot_mode.blockSignals(False)
+        self.auto_y.blockSignals(False)
+        self._render_plots(fit=True)
 
     def _manual_range(self, axes, source=None):
         if self._setting_ranges:
@@ -1284,14 +1379,16 @@ class _PyQtGraphQuadWindow:
         pcb = self._PCB_T
         components = []
 
-        def add(mesh, color, smooth=False, gl_options="opaque", spin_center=None, spin_dir=0.0):
+        def add(mesh, color, smooth=False, gl_options="opaque", spin_center=None, spin_dir=0.0,
+                rotor=None, blur=False):
             verts, faces = mesh
             verts = verts * self.BODY_SCALE
             if spin_center is not None:
                 spin_center = np.asarray(spin_center, dtype=float) * self.BODY_SCALE
             item = self._add_mesh(verts, faces, color, smooth, gl_options)
             components.append({"item": item, "verts": verts, "faces": faces,
-                               "spin_center": spin_center, "spin_dir": spin_dir})
+                               "spin_center": spin_center, "spin_dir": spin_dir,
+                               "rotor": rotor, "blur": blur})
 
         def box(sx, sy, sz, x, y, z0, rot=0.0):
             return _place(_prism_mesh(_rounded_rect(sx, sy, 1e-4, 1), z0, z0 + sz), rot, (x, y, 0.0))
@@ -1345,12 +1442,14 @@ class _PyQtGraphQuadWindow:
             legs.append(on_arm(angle, 0.050, 0.0085, 0.0015, 0.0015, -0.0125))
         add(_merge_meshes(legs), (0.09, 0.09, 0.10, 1.0))
 
-        # 55 mm propellers (spinning) and a faint disc for the blur of the blades.
-        for (mx, my), spin in zip(motors, self._PROP_DIRS):
+        # 55 mm propellers (spinning) and a faint disc for the blur of the
+        # blades; both take the rotor's state colour in _update_props.
+        for rotor, ((mx, my), spin) in enumerate(zip(motors, self._PROP_DIRS)):
             add(_place(_propeller_mesh(0.0275, self._PROP_Z, 14.0, spin), offset=(mx, my, 0.0)),
-                self.COLOR_PROP, spin_center=(mx, my, self._PROP_Z), spin_dir=spin)
-        add(_merge_meshes([_disc_mesh(0.0275, center=(mx, my, self._PROP_Z)) for mx, my in motors]),
-            self.COLOR_PROP[:3] + (0.05,), gl_options="translucent")
+                self.COLOR_PROP, spin_center=(mx, my, self._PROP_Z), spin_dir=spin, rotor=rotor)
+        for rotor, (mx, my) in enumerate(motors):
+            add(_disc_mesh(0.0275, center=(mx, my, self._PROP_Z)), self.COLOR_PROP[:3] + (0.05,),
+                gl_options="translucent", rotor=rotor, blur=True)
         return components
 
     def _init_scene(self):
@@ -1358,13 +1457,9 @@ class _PyQtGraphQuadWindow:
         grid_size = max(2.0, 1.4 * extent)
         distance = max(2.6, 2.0 * extent)
 
-        self.view.setCameraPosition(distance=distance, elevation=24.0, azimuth=-55.0)
-        try:
-            self.view.opts["center"] = self.pg.Vector(
-                float(center[0]), float(center[1]), float(center[2])
-            )
-        except Exception:
-            pass
+        # The default camera; "Reset view" returns to it.
+        self._default_camera = (center, distance, 24.0, -55.0)
+        self.reset_camera()
 
         # Two-layer ground grid: fine minor + coarse major.  Built from line
         # segments (GLGridItem's immediate-mode calls render nothing here).
@@ -1438,6 +1533,7 @@ class _PyQtGraphQuadWindow:
         show_waypoints = self.waypoints.size and not np.allclose(
             self.waypoints, self.waypoints[0]
         )
+        self.waypoint_items = []
         if show_waypoints:
             sphere_verts, sphere_faces = [], []
             vert_offset = 0
@@ -1446,12 +1542,12 @@ class _PyQtGraphQuadWindow:
                 sphere_verts.append(v)
                 sphere_faces.append(f + vert_offset)
                 vert_offset += len(v)
-            self._add_mesh(
+            self.waypoint_items.append(self._add_mesh(
                 np.vstack(sphere_verts),
                 np.vstack(sphere_faces),
                 _gl_color("#ffc04d"),  # shaded lighting darkens; start bright
                 smooth=True,
-            )
+            ))
             halo_verts, halo_faces = [], []
             vert_offset = 0
             for wp in self.waypoints:
@@ -1459,13 +1555,30 @@ class _PyQtGraphQuadWindow:
                 halo_verts.append(v)
                 halo_faces.append(f + vert_offset)
                 vert_offset += len(v)
-            self._add_mesh(
+            self.waypoint_items.append(self._add_mesh(
                 np.vstack(halo_verts),
                 np.vstack(halo_faces),
                 _gl_color("#f5a524", 0.22),
                 smooth=True,
                 gl_options="translucent",
+            ))
+
+        # The sampled reference path and a marker at the current reference
+        # point, when the reference moves (trajectories, takeoff).
+        self.reference_line = self.reference_marker = None
+        show_reference = len(self.reference_path) > 1 and not np.allclose(
+            self.reference_path, self.reference_path[0]
+        )
+        if show_reference:
+            self.reference_line = self.gl.GLLinePlotItem(
+                glOptions="translucent", pos=self.reference_path,
+                color=_gl_color(self.COLOR_REFERENCE, 0.55), width=1.5,
+                antialias=True, mode="line_strip",
             )
+            self.view.addItem(self.reference_line)
+            verts, faces = _sphere_mesh(0.012, segments=12, rings=8)
+            self.reference_marker = self._add_mesh(verts, faces, _gl_color(THEME["text"]), smooth=True)
+            self._move_reference_marker(self.reference_path[0])
 
         # Quad body meshes + thrust-axis tick (body +z; the last world_frame
         # point sits above the centre, not ahead of it).
@@ -1514,22 +1627,6 @@ class _PyQtGraphQuadWindow:
         )
         self.view.addItem(self.tether_line)
         self.tether_line.setVisible(False)
-        self.scene_options = self.QtWidgets.QToolButton(self.view)
-        self.scene_options.setText("View")
-        self.scene_options.setAccessibleName("Scene display options")
-        self.scene_options.setToolTip("Show world axes or the dashed height projection")
-        self.scene_options.setPopupMode(self.QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
-        menu = self.QtWidgets.QMenu(self.scene_options)
-        self.show_world_axes = menu.addAction("World axes")
-        self.show_world_axes.setCheckable(True)
-        self.show_world_axes.toggled.connect(self._set_world_axes_visible)
-        self.show_height_projection = menu.addAction("Height projection")
-        self.show_height_projection.setCheckable(True)
-        self.show_height_projection.toggled.connect(self.tether_line.setVisible)
-        self.scene_options.setMenu(menu)
-        self.scene_options.adjustSize()
-        self.scene_options.move(14, 14)
-        self.scene_options.show()
         if self.show_wind:
             self.wind_arrow = self.gl.GLLinePlotItem(
                     glOptions="translucent",
@@ -1542,28 +1639,114 @@ class _PyQtGraphQuadWindow:
         else:
             self.wind_arrow = None
 
-        # Key to the scene's marks and how to move the camera, as overlay
-        # labels like the axis letters.
-        entries = [("#5cc8ff", "flown path"), ("#ffc04d", "nose (body +X)"), (THEME["text"], "thrust axis")]
-        if self.show_wind:
-            entries.append((self.COLOR_WIND_ARROW, "wind velocity, 0.5 m per m/s" if self.wind_as_velocity else "wind force, 0.5 m per N"))
+        # View menu: one checkable entry per scene mark this run draws, in
+        # groups (vehicle, paths and markers, references).  The launcher keeps
+        # the choices across Reset through scene_toggles.
+        marks = [
+            ("nose_arrow", "Nose arrow (body +X)", [self.nose_arrow], True, "#ffc04d", "nose (body +X)"),
+            ("thrust_axis", "Thrust axis", [self.thrust_axis_line], True, THEME["text"], "thrust axis"),
+            None,
+            ("flown_path", "Flown path", [self.trail_line], True, "#5cc8ff", "flown path"),
+        ]
+        if show_reference:
+            marks.append(("reference_path", "Reference path", [self.reference_line], True,
+                          self.COLOR_REFERENCE, "reference path"))
+            marks.append(("reference_point", "Reference point (now)", [self.reference_marker], True,
+                          THEME["text"], "reference now"))
         if show_waypoints:
-            entries.append(("#ffc04d", "waypoints"))
-        self.scene_legend = self._overlay_label(
-            "&nbsp;&nbsp;&nbsp;".join(
-                "<span style='color:{}'>&#9644;</span>&nbsp;{}".format(color, text)
-                for color, text in entries
-            )
-        )
-        self._scene_legend_width = self.scene_legend.width()
+            marks.append(("waypoints", "Waypoints", self.waypoint_items, True, "#ffc04d", "waypoints"))
+        if self.show_wind:
+            marks.append(("wind_arrow", "Wind arrow", [self.wind_arrow], True, self.COLOR_WIND_ARROW,
+                          "wind velocity, 0.5 m per m/s" if self.wind_as_velocity else "wind force, 0.5 m per N"))
+        marks += [
+            None,
+            ("world_axes", "World axes", self.world_axes, False, None, None),
+            ("height_projection", "Height projection", [self.tether_line], False, None, None),
+        ]
+        self.scene_options = self.QtWidgets.QToolButton(self.view)
+        self.scene_options.setText("View")
+        self.scene_options.setAccessibleName("Scene display options")
+        self.scene_options.setToolTip("Choose which marks the 3D view shows")
+        self.scene_options.setPopupMode(self.QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = _make_checklist_menu(self.scene_options, self.QtCore, self.QtWidgets)
+        self.scene_toggles, self._scene_items, self._legend_entries = {}, {}, []
+        for mark in marks:
+            if mark is None:
+                menu.addSeparator()
+                continue
+            key, label, items, shown, color, legend = mark
+            action = menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(shown)
+            self.scene_toggles[key] = action
+            self._scene_items[key] = items
+            for item in items:
+                item.setVisible(shown)
+            if legend:
+                self._legend_entries.append((key, color, legend))
+        for key, action in self.scene_toggles.items():
+            action.toggled.connect(lambda visible, key=key: self._set_mark_visible(key, visible))
+        self.show_nose_arrow = self.scene_toggles["nose_arrow"]
+        self.show_world_axes = self.scene_toggles["world_axes"]
+        self.show_height_projection = self.scene_toggles["height_projection"]
+        self.scene_options.setMenu(menu)
+        self.scene_options.adjustSize()
+        self.scene_options.move(14, 14)
+        self.scene_options.show()
+
+        # Key to the visible marks and how to move the camera, as overlay
+        # labels like the axis letters.
+        self.scene_legend = self._overlay_label("")
         self.scene_legend.setWordWrap(True)
+        self._set_legend_text()
         self.scene_hint = self._overlay_label("Drag to orbit · scroll to zoom")
+        self.reset_view_button = self.QtWidgets.QToolButton(self.view)
+        self.reset_view_button.setText("Reset view")
+        self.reset_view_button.setAccessibleName("Reset camera view")
+        self.reset_view_button.setToolTip("Return the camera to the default view")
+        self.reset_view_button.clicked.connect(self.reset_camera)
+        self.reset_view_button.adjustSize()
+        self.reset_view_button.show()
         self._update_axis_labels()
 
-    def _set_world_axes_visible(self, visible):
-        for axis in self.world_axes:
-            axis.setVisible(visible)
-        self._update_axis_labels()
+    def reset_camera(self):
+        """Return the camera to the default view of _init_scene."""
+        center, distance, elevation, azimuth = self._default_camera
+        self.view.setCameraPosition(distance=distance, elevation=elevation, azimuth=azimuth)
+        try:
+            self.view.opts["center"] = self.pg.Vector(
+                float(center[0]), float(center[1]), float(center[2])
+            )
+        except Exception:
+            pass
+        self.view.update()
+        if hasattr(self, "reset_view_button"):
+            self._update_axis_labels()
+
+    def _set_mark_visible(self, key, visible):
+        for item in self._scene_items[key]:
+            item.setVisible(visible)
+        self._set_legend_text()
+
+    def _set_legend_text(self):
+        """Legend of the scene marks whose View entry is checked."""
+        legend = self.scene_legend
+        entries = [(color, text) for key, color, text in self._legend_entries
+                   if self.scene_toggles[key].isChecked()]
+        legend.setVisible(bool(entries))
+        # Measure the unwrapped text; _update_axis_labels fixes the size again.
+        legend.setMinimumSize(0, 0)
+        legend.setMaximumSize(16777215, 16777215)
+        legend.setWordWrap(False)
+        legend.setText("&nbsp;&nbsp;&nbsp;".join(
+            "<span style='color:{}'>&#9644;</span>&nbsp;{}".format(color, text)
+            for color, text in entries
+        ))
+        legend.adjustSize()
+        self._scene_legend_width = legend.width()
+        legend.setWordWrap(True)
+        if hasattr(self, "reset_view_button"):
+            self._update_axis_labels()
 
     def _overlay_label(self, text):
         label = self.QtWidgets.QLabel(text, self.view)
@@ -1625,10 +1808,25 @@ class _PyQtGraphQuadWindow:
         self._last_payload = payload
 
         rot, origin = _frame_rotation_and_origin(frame)
-        self._update_body(rot, origin, frame, animate=record)
+        rotor_rates, rotor_states = rotor_display_state(
+            motor_thrusts, self.hover_thrust_n, effectiveness_truth)
+        self._update_body(rot, origin, frame, animate=record, rotor_rates=rotor_rates)
+        self._update_props(rotor_states)
         self._update_wind_arrow(origin, wind_force)
         if record:
             self._update_history(origin, sim_time)
+        reference_pos = (np.asarray(payload["reference_pos"], dtype=float).reshape(3,)
+                         if isinstance(payload, dict) and payload.get("reference_pos") is not None
+                         else None)
+        if self.reference_marker is not None and reference_pos is not None:
+            self._move_reference_marker(reference_pos)
+        tracking = None
+        if self.show_tracking and reference_pos is not None:
+            yaw = float(attitude_deg[2])
+            # The reference yaw comes wrapped to +/-180; plot it next to the
+            # unwrapped flown yaw so a full turn does not jump.
+            yaw_ref = yaw + (float(payload.get("reference_yaw_deg", np.nan)) - yaw + 180.0) % 360.0 - 180.0
+            tracking = (np.concatenate((origin, reference_pos)), np.array([yaw, yaw_ref]))
 
         # Side-panel repaint is the main per-frame UI cost (antialiased
         # polylines + axis relayout on setXRange/setYRange).  Refresh it at
@@ -1643,6 +1841,7 @@ class _PyQtGraphQuadWindow:
             motor_thrusts,
             effectiveness_truth,
             effectiveness_estimate,
+            tracking=tracking,
             record=record,
             paint=force or not self._ui_phase,
         )
@@ -1673,14 +1872,15 @@ class _PyQtGraphQuadWindow:
         if self._last_payload is not None:
             self._set_frame(self._last_payload, force=True, record=False)
 
-    def _update_body(self, rot, origin, frame, animate=True):
+    def _update_body(self, rot, origin, frame, animate=True, rotor_rates=None):
         if animate:
-            self.prop_angle += np.radians(420.0) / self.fps
+            rates = np.full(4, PROP_HOVER_DEG_S) if rotor_rates is None else rotor_rates
+            self.prop_angles += np.radians(np.minimum(rates / self.fps, PROP_MAX_DEG_PER_FRAME))
         for comp in self.body_components:
             verts = comp["verts"]
             if comp["spin_center"] is not None:
                 verts = _spin_verts(
-                    verts, comp["spin_center"], self.prop_angle * comp["spin_dir"]
+                    verts, comp["spin_center"], self.prop_angles[comp["rotor"]] * comp["spin_dir"]
                 )
             comp["item"].setMeshData(
                 vertexes=verts @ rot.T + origin, faces=comp["faces"]
@@ -1690,6 +1890,26 @@ class _PyQtGraphQuadWindow:
         self.nose_arrow.setData(antialias=True, pos=self.nose_arrow_body @ rot.T + origin)
         ground = np.array([origin[0], origin[1], 0.0])
         self.tether_line.setData(antialias=True, pos=_dashify(np.vstack((ground, origin)), 0.035, 0.035))
+
+    def _update_props(self, states):
+        """Colour each propeller by its state; a failed rotor stands still,
+        so its blur disc is hidden."""
+        if states == self.prop_states:
+            return
+        self.prop_states = states
+        for comp in self.body_components:
+            if comp["rotor"] is None:
+                continue
+            state = states[comp["rotor"]]
+            color = self.COLOR_PROP_STATE[state]
+            if comp["blur"]:
+                comp["item"].setVisible(state != "failed")
+                color = color[:3] + (0.05 if state == "nominal" else 0.10,)
+            comp["item"].setColor(color)
+
+    def _move_reference_marker(self, position):
+        self.reference_marker.resetTransform()
+        self.reference_marker.translate(*(float(v) for v in position))
 
     def _update_wind_arrow(self, origin, wind_force):
         if self.wind_arrow is None:
@@ -1743,10 +1963,17 @@ class _PyQtGraphQuadWindow:
             self.scene_legend.setFixedWidth(legend_width)
         self.scene_legend.setFixedHeight(self.scene_legend.heightForWidth(legend_width))
         self.scene_legend.move(14, h - self.scene_legend.height() - 14)
+        # The hint and the Reset view button share the bottom-right corner;
+        # they move above the legend when the view is too narrow for both.
+        button = self.reset_view_button
+        corner_width = self.scene_hint.width() + 8 + button.width()
         hint_bottom = 14
-        if legend_width + self.scene_hint.width() + 42 > w:
+        if legend_width + corner_width + 42 > w:
             hint_bottom += self.scene_legend.height() + 8
-        self.scene_hint.move(max(14, w - self.scene_hint.width() - 14), h - self.scene_hint.height() - hint_bottom)
+        hint_x = max(14 + button.width() + 8, w - self.scene_hint.width() - 14)
+        hint_y = h - self.scene_hint.height() - hint_bottom
+        self.scene_hint.move(hint_x, hint_y)
+        button.move(hint_x - button.width() - 8, hint_y + (self.scene_hint.height() - button.height()) // 2)
 
     def _update_history(self, origin, sim_time):
         self.history.append(origin)
@@ -1769,7 +1996,8 @@ class _PyQtGraphQuadWindow:
         )
 
     def _update_telemetry(self, sim_time, wind_force, yaw_rate_dps, position_error_norm,
-                          motor_thrusts, effectiveness_truth, effectiveness_estimate, *, record=True, paint=True):
+                          motor_thrusts, effectiveness_truth, effectiveness_estimate, *,
+                          tracking=None, record=True, paint=True):
         if not np.isfinite(sim_time):
             return
         if record and (not self.time_history or sim_time > self.time_history[-1]):
@@ -1781,12 +2009,16 @@ class _PyQtGraphQuadWindow:
                                     (self.eff_est_history, effectiveness_estimate),
                                     (self.eff_truth_history, effectiveness_truth)):
                 history.append(np.full(4, np.nan) if values is None else values.copy())
+            self.tracking_pos_history.append(np.full(6, np.nan) if tracking is None else tracking[0])
+            self.tracking_yaw_history.append(np.full(2, np.nan) if tracking is None else tracking[1])
         if not paint:
             return
         n = len(self.time_history)
         data = {"error": np.asarray(self.pos_err_history).reshape(n, 1),
                 "spin": np.asarray(self.yaw_rate_history).reshape(n, 1),
-                "wind": np.asarray(self.wind_force_history).reshape(n, 3)}
+                "wind": np.asarray(self.wind_force_history).reshape(n, 3),
+                "tracking_pos": np.asarray(self.tracking_pos_history).reshape(n, 6),
+                "tracking_yaw": np.asarray(self.tracking_yaw_history).reshape(n, 2)}
         data["rotor"] = (np.column_stack((np.asarray(self.eff_est_history).reshape(n, 4),
                                             np.asarray(self.eff_truth_history).reshape(n, 4)))
                          if self.rotor_plot_kind == "effectiveness"

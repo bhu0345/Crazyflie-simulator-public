@@ -75,6 +75,61 @@ class TestScenario(unittest.TestCase):
         with self.assertRaises(ValueError):
             Scenario(sim_mode="hover")
 
+    def test_takeoff_climbs_from_the_start_and_is_off_by_default(self):
+        scenario = Scenario(sim_mode="hovering", initial_pos=(0.0, 0.0, 0.0),
+                            hover_setpoint=(0.2, 0.0, 1.0), hover_yaw=0.4, takeoff_duration_s=2.0)
+        desired, plot_waypoints, duration = scenario.reference()
+        np.testing.assert_allclose(plot_waypoints, [[0.0, 0.0, 0.0], [0.2, 0.0, 1.0]])
+        self.assertEqual(duration, 50.0)
+        np.testing.assert_allclose(desired(0.0).pos, np.zeros(3))
+        np.testing.assert_allclose(desired(1.0).pos, [0.1, 0.0, 0.5])
+        np.testing.assert_allclose(desired(1.0).vel, [0.1875, 0.0, 0.9375])  # peak 1.875 * d / T
+        for t in (0.0, 2.0, 5.0):
+            np.testing.assert_allclose(desired(t).acc, np.zeros(3), atol=1e-12)
+        np.testing.assert_allclose(desired(5.0).pos, [0.2, 0.0, 1.0])
+        np.testing.assert_allclose(desired(5.0).vel, np.zeros(3))
+        self.assertEqual(desired(1.0).yaw, 0.4)
+        stepped = Scenario(sim_mode="hovering", initial_pos=(0.0, 0.0, 0.0)).reference()[0]
+        np.testing.assert_allclose(stepped(0.0).pos, [0.0, 0.0, 1.0])
+
+    def test_timed_waypoints_are_reached_on_time_without_overshoot(self):
+        rows = ((2.0, 0.0, 0.0, 1.0, 0.0), (4.0, 0.6, 0.0, 1.0, 0.0), (6.0, 0.6, 0.6, 1.2, 3.0),
+                (7.0, 0.6, 0.6, 1.2, -3.0), (9.0, 0.0, 0.6, 0.5, -3.0))
+        scenario = Scenario(sim_mode="trajectory", waypoint_source="timed", timed_waypoints=rows)
+        desired, plot_waypoints, duration = scenario.reference()
+        self.assertEqual(duration, 11.0)
+        self.assertEqual(len(plot_waypoints), 6)  # the start at t = 0 is prepended
+        for t, x, y, z, yaw in ((0.0, 0.0, 0.0, 0.0, 0.0),) + rows:
+            state = desired(t)
+            np.testing.assert_allclose(state.pos, [x, y, z], atol=1e-12)
+            self.assertAlmostEqual(np.cos(state.yaw - yaw), 1.0)
+        times = np.linspace(0.0, duration, 2201)
+        states = [desired(t) for t in times]
+        pos = np.array([s.pos for s in states])
+        vel = np.array([s.vel for s in states])
+        self.assertTrue(np.all(pos.min(axis=0) >= [0.0, 0.0, 0.0]))
+        self.assertTrue(np.all(pos.max(axis=0) <= [0.6, 0.6, 1.2] + np.array(1e-12)))
+        np.testing.assert_allclose(np.gradient(pos, times, axis=0)[2:-2], vel[2:-2], atol=2e-3)
+        # 3.0 -> -3.0 rad is a short turn through +/-pi, not a 6 rad unwind.
+        yaw = np.unwrap([s.yaw for s in states])
+        self.assertLess(np.ptp(yaw[(times >= 6.0) & (times <= 7.0)]), 0.3)
+        np.testing.assert_allclose(desired(10.0).vel, np.zeros(3))
+
+    def test_timed_waypoints_validation(self):
+        cases = (
+            ((), "list of"),
+            (((1.0, 0.0, 0.0, 1.0),), "list of"),
+            (((-1.0, 0.0, 0.0, 1.0, 0.0),), "negative"),
+            (((0.0, 1.0, 0.0, 1.0, 0.0), (2.0, 0.0, 0.0, 1.0, 0.0)), "initial_pos"),
+            (((0.0, 0.0, 0.0, 0.0, 0.0),), "after t = 0"),
+            (((2.0, 0.0, 0.0, 1.0, 0.0), (2.0, 1.0, 0.0, 1.0, 0.0)), "increase"),
+        )
+        for rows, needle in cases:
+            with self.subTest(rows=rows):
+                scenario = Scenario(sim_mode="trajectory", waypoint_source="timed", timed_waypoints=rows)
+                with self.assertRaisesRegex(ValueError, needle):
+                    scenario.reference()
+
 
 if __name__ == "__main__":
     unittest.main()

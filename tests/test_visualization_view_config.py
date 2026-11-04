@@ -33,7 +33,7 @@ fake_pg = types.ModuleType("crazyflie_sim.visualization.quad_plot_pg")
 
 def _clean(value):
     if isinstance(value, np.ndarray):
-        return [float(v) for v in value]
+        return value.tolist()
     if isinstance(value, float) and not np.isfinite(value):
         return None
     return value
@@ -228,6 +228,25 @@ class TestMatplotlibPayloadParsing(unittest.TestCase):
         self.assertIsNone(motor_thrusts)
         self.assertIsNone(effectiveness_truth)
         self.assertIsNone(effectiveness_estimate)
+
+
+class TestRotorDisplayState(unittest.TestCase):
+    def test_spin_rate_follows_thrust_and_effectiveness(self):
+        from crazyflie_sim.visualization.quad_plot_pg import PROP_HOVER_DEG_S, rotor_display_state
+
+        hover = 0.09
+        rates, states = rotor_display_state([hover, 4 * hover, 0.0, hover], hover, None)
+        np.testing.assert_allclose(rates, PROP_HOVER_DEG_S * np.array([1.0, 2.0, 0.0, 1.0]))
+        self.assertEqual(states, ("nominal",) * 4)
+        rates, states = rotor_display_state([hover] * 4, hover, (0.5, 1.0, 0.0, 1.0))
+        np.testing.assert_allclose(rates, PROP_HOVER_DEG_S * np.array([0.5, 1.0, 0.0, 1.0]))
+        self.assertEqual(states, ("partial", "nominal", "failed", "nominal"))
+        # A failed rotor stands still even if the plant still reports thrust.
+        rates, _ = rotor_display_state([2 * hover] * 4, hover, (1.0, 1.0, 1.0, 0.0))
+        self.assertEqual(rates[3], 0.0)
+        # Without telemetry every propeller turns at the hover rate.
+        rates, _ = rotor_display_state(None, None, None)
+        np.testing.assert_allclose(rates, np.full(4, PROP_HOVER_DEG_S))
 
 
 if __name__ == "__main__":

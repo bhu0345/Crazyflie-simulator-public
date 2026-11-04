@@ -67,6 +67,7 @@ python runsim.py                                   # live 3D view of the default
 python runsim.py --gui                             # pick scenario, controller and vehicle in a panel
 python runsim.py hover_wind_default.yaml --controller mellinger
 python runsim.py trajectory_default.yaml           # minimum-snap trajectory, Mellinger
+python runsim.py trajectory_timed.yaml             # waypoints reached at given times
 python -m crazyflie_sim.experiments.compare hover_rotor_fault_default.yaml \
     --fault-cases power_loss_25pct power_loss_50pct
 python -m crazyflie_sim.experiments.compare hover_wind_monte_carlo.yaml --monte-carlo
@@ -74,9 +75,9 @@ python -m crazyflie_sim.experiments.benchmark      # scorecard on the standard s
 python -m unittest discover -s tests -t .          # tests, including the golden trajectories
 ```
 
-The default run is a 20 s hover starting at 1 m, without wind or rotor
-faults (`hovering.yaml`). Choose a disturbance scenario explicitly
-when needed.
+The default run (`default.yaml`) takes off from the origin, climbs to 1 m in
+2 s along a minimum-jerk profile and hovers there until 20 s, without wind
+or rotor faults. Choose a disturbance scenario explicitly when needed.
 
 Everything lives in the `crazyflie_sim` package.  A `CONFIG` argument is a
 path, or the name of a config bundled in `crazyflie_sim/configs/` (as above;
@@ -101,14 +102,28 @@ view with a toolbar for choosing the run:
 - **Scenario**, **Controller** and **Vehicle** come from the bundled configs and the
   registries; **File → Open/Save config…** loads or writes a complete YAML
   setup that `python runsim.py SAVED.yaml` flies the same way.
+- **Trajectory…** opens a table of waypoints `t, x, y, z, ψ` (s, m, deg),
+  with CSV import and export.  **Apply** flies them as a timed trajectory
+  (scenario "custom (unsaved)"; **Save config…** keeps it), and the side
+  panel then plots flown against reference position and yaw.
 - **Start / Pause / Resume / Run again** (Space) and **Reset** (Ctrl+R) drive
   the same simulation loop as every other run; **0.25x / 0.5x** slows only
   the display.
 - The side panel shows the position error, the scheduled event, the vehicle
   state and synchronized charts with a shared cursor; **Export results…**
   archives a finished or interrupted run like the command-line tools do.
-- In the 3D view, drag to orbit and scroll to zoom; the vehicle is drawn 2.5
-  times its true size so it stays visible at metre scale.
+- In the 3D view, drag to orbit and scroll to zoom, and **Reset view** returns
+  to the starting camera; **View** shows or hides each mark: nose arrow,
+  thrust axis, flown and reference paths, reference point, waypoints, wind
+  arrow, world axes and a height projection.  The vehicle is drawn 2.5
+  times its true size so it stays visible at metre scale.  A moving
+  reference (trajectory, takeoff) is drawn as a path with a marker at the
+  current reference point.
+- Propellers turn at 5 rev/s in hover, scaled with each rotor's
+  thrust-equivalent speed.  After a fault onset a partly failed rotor turns
+  orange and slower (by its remaining effectiveness, as a cue: a controller
+  that compensates restores its real speed); a failed rotor turns red and
+  stops.
 
 The full guide (chart modes, display options, result statistics, exports) is
 [docs/gui.md](docs/gui.md).  `--record` and `--archive` remain direct-run
@@ -215,9 +230,19 @@ plus `controller_mode`, `controller_gains`, `params_overrides`, `metrics` and
 - `sim_mode`: `hovering` (hold a setpoint without disturbances),
   `hover_wind` (hold a setpoint, wind from `wind.start_time`),
   `hover_rotor_fault` (hold, then `rotor_fault`), or `trajectory`
-  (minimum-snap path through `user_waypoints`, or a helix / CSV).
+  (minimum-snap path through `user_waypoints` at `trajectory_speed`, or a
+  helix / CSV).
   In the YAML scenario interface, wind is active only in `hover_wind` and
   rotor faults only in `hover_rotor_fault`.
+- `takeoff_duration_s` (hover modes, default 0): the reference climbs from
+  `initial_pos` to `hover_setpoint` along a minimum-jerk profile of this
+  length instead of stepping to the setpoint.
+- `waypoint_source: timed` with `timed_waypoints` rows `[t, x, y, z, yaw]`
+  (s, m, rad): the reference reaches each waypoint at its time `t` and holds
+  the last one for 2 s.  Between two waypoints every axis and the yaw move
+  monotonically (quintic segments, no overshoot), stopping where they
+  reverse or hold.  The start pose is prepended at t = 0.  The LQR is
+  linearized at yaw 0 and tracks to about ±45° of yaw.
 - `wind`: per-axis waveforms `off | sin | constant | square | impulse |
   smoothstep | dryden` (`model/wind.py`); `as_velocity: true` makes it a wind
   velocity acting through the aero model instead of a force.
